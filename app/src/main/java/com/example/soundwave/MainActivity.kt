@@ -1,15 +1,19 @@
 
 package com.example.soundwave
 
+import android.Manifest
+import android.content.ContentUris
 import android.content.Context
-import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,13 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,81 +30,55 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private data class Song(val uri: Uri, val title: String)
+private data class Song(
+    val uri: Uri,
+    val title: String,
+    val artist: String
+)
 
-private const val PREFS_NAME = "soundwave_storage"
+private const val PREFS = "soundwave_storage"
+private val BG = Color(0xFF0A0A0A)
+private val CARD = Color(0xFF191919)
+private val RED = Color(0xFFFF3030)
+private val WHITE = Color(0xFFF5F5F5)
+private val GREY = Color(0xFFAAAAAA)
 
-private fun loadFavorites(context: Context): Set<String> {
-    val prefs = context.getSharedPreferences(
-        PREFS_NAME, Context.MODE_PRIVATE
-    )
-    return prefs.getStringSet("favorites", emptySet())
+private fun prefs(context: Context) =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+private fun loadFavorites(context: Context): Set<String> =
+    prefs(context).getStringSet("favorites", emptySet())
         ?.toSet() ?: emptySet()
+
+private fun saveFavorites(context: Context, values: Set<String>) {
+    prefs(context).edit()
+        .putStringSet("favorites", values.toSet()).apply()
 }
 
-private fun saveFavorites(context: Context, favorites: Set<String>) {
-    context.getSharedPreferences(
-        PREFS_NAME, Context.MODE_PRIVATE
-    ).edit()
-        .putStringSet("favorites", favorites.toSet())
-        .apply()
-}
-
-private fun readSong(context: Context, uri: Uri): Song {
-    var title = uri.lastPathSegment
-        ?.substringAfterLast('/')
-        ?.substringAfterLast(':')
-        ?: "Local track"
-
-    context.contentResolver.query(
-        uri,
-        arrayOf(OpenableColumns.DISPLAY_NAME),
-        null, null, null
-    )?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            val index = cursor.getColumnIndex(
-                OpenableColumns.DISPLAY_NAME
-            )
-            if (index >= 0) {
-                title = cursor.getString(index) ?: title
-            }
-        }
-    }
-
-    return Song(uri, title.ifBlank { "Local track" })
-}
-
-private fun loadPlaylists(context: Context): Map<String, List<Song>> {
-    val prefs = context.getSharedPreferences(
-        PREFS_NAME, Context.MODE_PRIVATE
-    )
-    val saved = prefs.getString("playlists_json", null)
+private fun loadPlaylists(
+    context: Context
+): Map<String, List<String>> {
+    val raw = prefs(context).getString("playlists", null)
         ?: return emptyMap()
 
     return try {
-        val json = JSONObject(saved)
-        val result = mutableMapOf<String, List<Song>>()
+        val json = JSONObject(raw)
+        val result = mutableMapOf<String, List<String>>()
         val keys = json.keys()
 
         while (keys.hasNext()) {
-            val name = keys.next()
-            val uris = json.getJSONArray(name)
-            val restored = mutableListOf<Song>()
-
-            for (i in 0 until uris.length()) {
-                val uri = Uri.parse(uris.getString(i))
-                try {
-                    restored.add(readSong(context, uri))
-                } catch (_: Exception) {
-                    // Ignore files that cannot be accessed.
-                }
-            }
-            result[name] = restored
+            val key = keys.next()
+            val array = json.getJSONArray(key)
+            result[key] = List(array.length()) { array.getString(it) }
         }
         result
     } catch (_: Exception) {
@@ -116,23 +88,56 @@ private fun loadPlaylists(context: Context): Map<String, List<Song>> {
 
 private fun savePlaylists(
     context: Context,
-    playlists: Map<String, List<Song>>
+    values: Map<String, List<String>>
 ) {
     val json = JSONObject()
-
-    playlists.forEach { (name, songs) ->
-        json.put(
-            name,
-            JSONArray(songs.map { it.uri.toString() })
-        )
+    values.forEach { (name, uris) ->
+        json.put(name, JSONArray(uris))
     }
-
-    context.getSharedPreferences(
-        PREFS_NAME, Context.MODE_PRIVATE
-    ).edit()
-        .putString("playlists_json", json.toString())
-        .apply()
+    prefs(context).edit().putString("playlists", json.toString()).apply()
 }
+
+private suspend fun scanMusic(context: Context): List<Song> =
+    withContext(Dispatchers.IO) {
+        val result = mutableListOf<Song>()
+        val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+
+        val columns = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST
+        )
+
+        context.contentResolver.query(
+            collection,
+            columns,
+            "${MediaStore.Audio.Media.IS_MUSIC} != 0",
+            null,
+            "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(
+                MediaStore.Audio.Media._ID
+            )
+            val titleCol = cursor.getColumnIndexOrThrow(
+                MediaStore.Audio.Media.TITLE
+            )
+            val artistCol = cursor.getColumnIndexOrThrow(
+                MediaStore.Audio.Media.ARTIST
+            )
+
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idCol)
+                val uri = ContentUris.withAppendedId(collection, id)
+                val title = cursor.getString(titleCol) ?: "Unknown song"
+                val artist = cursor.getString(artistCol)
+                    ?.takeUnless { it == "<unknown>" }
+                    ?: "Unknown artist"
+
+                result.add(Song(uri, title, artist))
+            }
+        }
+        result
+    }
 
 class MainActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
@@ -140,9 +145,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         player = ExoPlayer.Builder(this).build()
-        setContent {
-            SoundwaveScreen(player!!)
-        }
+        setContent { SoundwaveScreen(player!!) }
     }
 
     override fun onDestroy() {
@@ -157,21 +160,61 @@ class MainActivity : ComponentActivity() {
 fun SoundwaveScreen(player: ExoPlayer) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    var songs by remember { mutableStateOf(listOf<Song>()) }
+    var songs by remember { mutableStateOf(emptyList<Song>()) }
+    var favorites by remember { mutableStateOf(loadFavorites(context)) }
+    var playlists by remember { mutableStateOf(loadPlaylists(context)) }
     var current by remember { mutableStateOf<Song?>(null) }
     var playing by remember { mutableStateOf(false) }
+    var permissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var status by remember { mutableStateOf("Preparing library…") }
+    var tab by remember { mutableIntStateOf(0) }
     var search by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var sort by remember { mutableStateOf("Name") }
+    var sortMenu by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var showCreate by remember { mutableStateOf(false) }
+    var playlistName by remember { mutableStateOf("") }
+    var songToAdd by remember { mutableStateOf<Song?>(null) }
 
-    // Load saved data when the screen starts.
-    var favorites by remember {
-        mutableStateOf(loadFavorites(context))
-    }
-    var playlists by remember {
-        mutableStateOf(loadPlaylists(context))
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionGranted = granted
+        if (!granted) {
+            status = "Music access denied. Allow it in app settings."
+        }
     }
 
-    // Save automatically whenever either value changes.
+    LaunchedEffect(Unit) {
+        if (!permissionGranted) {
+            permissionLauncher.launch(
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            )
+        }
+    }
+
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted) {
+            status = "Scanning your music…"
+            try {
+                songs = scanMusic(context)
+                status = if (songs.isEmpty()) {
+                    "No audio found. Try refreshing after adding music."
+                } else {
+                    "${songs.size} songs in your library"
+                }
+            } catch (_: Exception) {
+                status = "Could not scan music. Check app permissions."
+            }
+        }
+    }
+
     LaunchedEffect(favorites) {
         saveFavorites(context, favorites)
     }
@@ -180,118 +223,185 @@ fun SoundwaveScreen(player: ExoPlayer) {
         savePlaylists(context, playlists)
     }
 
-    var showCreatePlaylist by remember { mutableStateOf(false) }
-    var playlistName by remember { mutableStateOf("") }
-    var songForPlaylist by remember { mutableStateOf<Song?>(null) }
-    var showPlaylistPicker by remember { mutableStateOf(false) }
-
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris ->
-        val added = uris.mapNotNull { uri ->
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: Exception) {
-                // Some providers do not support persistent permissions.
-            }
-
-            try {
-                readSong(context, uri)
-            } catch (_: Exception) {
-                null
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playing = isPlaying
             }
         }
-
-        songs = (songs + added).distinctBy { it.uri }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
-
-    val bg = Color(0xFF101010)
-    val surface = Color(0xFF202020)
-    val red = Color(0xFFFF3030)
-    val white = Color.White
-    val muted = Color.LightGray
 
     fun playSong(song: Song) {
         current = song
         player.setMediaItem(MediaItem.fromUri(song.uri))
         player.prepare()
         player.play()
-        playing = true
     }
 
-    val visibleSongs = when (selectedTab) {
+    val artists = songs.map { it.artist }.distinct().sorted()
+
+    val visibleSongs = when (tab) {
         1 -> songs.filter { it.uri.toString() in favorites }
-        else -> songs
-    }.filter { it.title.contains(search, ignoreCase = true) }
+        3 -> songs.filter { it.artist.contains(search, true) }
+        else -> songs.filter {
+            it.title.contains(search, true) ||
+                it.artist.contains(search, true)
+        }
+    }.let { list ->
+        when (sort) {
+            "Artist" -> list.sortedBy { it.artist.lowercase() }
+            else -> list.sortedBy { it.title.lowercase() }
+        }
+    }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = red,
-            background = bg,
-            surface = surface
+            primary = RED,
+            background = BG,
+            surface = CARD
         )
     ) {
         Scaffold(
-            containerColor = bg,
+            containerColor = BG,
             topBar = {
                 TopAppBar(
                     title = {
                         Column {
                             Text(
                                 "Soundwave",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 25.sp
+                                color = WHITE,
+                                fontSize = 25.sp,
+                                fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "Your music. Your way.",
-                                color = muted,
-                                fontSize = 12.sp
+                                "YOUR MUSIC. YOUR WAY.",
+                                color = RED,
+                                fontSize = 10.sp,
+                                letterSpacing = 2.sp
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = "Settings",
+                                tint = WHITE
                             )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = bg,
-                        titleContentColor = white
+                        containerColor = BG
                     )
                 )
             },
             bottomBar = {
-                current?.let { song ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .background(surface)
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                song.title,
-                                color = white,
-                                maxLines = 1,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                "Local audio",
-                                color = muted,
-                                fontSize = 12.sp
+                Column {
+                    current?.let { song ->
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .background(Color(0xFF242020))
+                                .clickable { player.play() }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    Modifier.size(42.dp)
+                                        .background(
+                                            Color(0xFF391414),
+                                            RoundedCornerShape(10.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.MusicNote,
+                                        contentDescription = null,
+                                        tint = RED
+                                    )
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        song.title,
+                                        color = WHITE,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        song.artist,
+                                        color = GREY,
+                                        fontSize = 12.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    if (playing) player.pause()
+                                    else player.play()
+                                }) {
+                                    AnimatedContent(
+                                        targetState = playing,
+                                        label = "play-pause"
+                                    ) { isPlaying ->
+                                        Icon(
+                                            if (isPlaying) Icons.Default.Pause
+                                            else Icons.Default.PlayArrow,
+                                            contentDescription = "Play or pause",
+                                            tint = RED
+                                        )
+                                    }
+                                }
+                            }
+                            val progress by remember {
+                                derivedStateOf {
+                                    if (player.duration > 0)
+                                        player.currentPosition.toFloat() /
+                                            player.duration
+                                    else 0f
+                                }
+                            }
+                            LinearProgressIndicator(
+                                progress = { progress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                                    .padding(top = 6.dp)
+                                    .height(2.dp),
+                                color = RED,
+                                trackColor = Color(0xFF494040)
                             )
                         }
-                        IconButton(onClick = {
-                            if (playing) {
-                                player.pause()
-                                playing = false
-                            } else {
-                                player.play()
-                                playing = true
-                            }
-                        }) {
-                            Icon(
-                                if (playing) Icons.Default.Pause
-                                else Icons.Default.PlayArrow,
-                                contentDescription = "Play or pause",
-                                tint = red
+                    }
+
+                    NavigationBar(containerColor = Color(0xFF111111)) {
+                        val labels = listOf(
+                            "Songs", "Favourites", "Playlists", "Artists"
+                        )
+                        val icons = listOf(
+                            Icons.Default.MusicNote,
+                            Icons.Default.Favorite,
+                            Icons.Default.List,
+                            Icons.Default.Person
+                        )
+
+                        labels.forEachIndexed { index, label ->
+                            NavigationBarItem(
+                                selected = tab == index,
+                                onClick = { tab = index },
+                                icon = {
+                                    Icon(icons[index], contentDescription = label)
+                                },
+                                label = {
+                                    Text(label, fontSize = 9.sp, maxLines = 1)
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = RED,
+                                    selectedTextColor = RED,
+                                    indicatorColor = Color(0xFF351515),
+                                    unselectedIconColor = GREY,
+                                    unselectedTextColor = GREY
+                                )
                             )
                         }
                     }
@@ -299,182 +409,216 @@ fun SoundwaveScreen(player: ExoPlayer) {
             }
         ) { padding ->
             Column(
-                Modifier.padding(padding)
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp)
+                Modifier.fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 14.dp)
             ) {
                 Spacer(Modifier.height(8.dp))
 
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(surface, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.Search,
-                        contentDescription = null,
-                        tint = muted
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("Search your music") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null
+                        )
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = WHITE,
+                        unfocusedTextColor = WHITE,
+                        focusedBorderColor = RED,
+                        unfocusedBorderColor = CARD,
+                        focusedLeadingIconColor = RED,
+                        unfocusedLeadingIconColor = GREY
                     )
-                    TextField(
-                        value = search,
-                        onValueChange = { search = it },
-                        placeholder = { Text("Search music") },
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedTextColor = white,
-                            unfocusedTextColor = white,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
-                        ),
+                )
+
+                Spacer(Modifier.height(10.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        listOf(
+                            "Your music", "Your favourites",
+                            "Your playlists", "Artists"
+                        )[tab],
+                        color = WHITE,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f)
                     )
-                }
 
-                Spacer(Modifier.height(8.dp))
-
-                // Compact tabs that fit on one line.
-                TabRow(
-                    selectedTabIndex = selectedTab,
-                    containerColor = bg,
-                    contentColor = red
-                ) {
-                    listOf("Songs", "Favourites", "Playlists").forEachIndexed { index, title ->
-                        Tab(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            text = {
-                                Text(
-                                    title,
-                                    fontSize = 11.sp,
-                                    maxLines = 1
+                    if (tab == 0 || tab == 3) {
+                        Box {
+                            TextButton(onClick = { sortMenu = true }) {
+                                Text(sort, color = RED, fontSize = 12.sp)
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Sort",
+                                    tint = RED
                                 )
                             }
+                            DropdownMenu(
+                                expanded = sortMenu,
+                                onDismissRequest = { sortMenu = false }
+                            ) {
+                                listOf("Name", "Artist").forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option) },
+                                        onClick = {
+                                            sort = option
+                                            sortMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (tab == 2) {
+                        IconButton(onClick = {
+                            playlistName = ""
+                            showCreate = true
+                        }) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "Create playlist",
+                                tint = RED
+                            )
+                        }
+                    }
+
+                    IconButton(onClick = {
+                        if (permissionGranted) {
+                            status = "Rescanning…"
+                        } else {
+                            permissionLauncher.launch(
+                                Manifest.permission.READ_EXTERNAL_STORAGE
+                            )
+                        }
+                    }) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh library",
+                            tint = RED
                         )
                     }
                 }
 
-                Spacer(Modifier.height(10.dp))
+                Text(status, color = GREY, fontSize = 11.sp)
 
-                when (selectedTab) {
-                    0 -> {
-                        Button(
-                            onClick = {
-                                picker.launch(arrayOf("audio/*"))
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = red,
-                                contentColor = white
-                            )
-                        ) {
-                            Icon(
-                                Icons.Default.FolderOpen,
-                                contentDescription = null
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("Add local music")
-                        }
-                    }
+                Spacer(Modifier.height(6.dp))
 
-                    1 -> Text(
-                        "Your favourite songs",
-                        color = white,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-
-                    2 -> {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "Your playlists",
-                                color = white,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(
-                                onClick = {
-                                    playlistName = ""
-                                    showCreatePlaylist = true
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = null,
-                                    tint = red
-                                )
-                                Text("Create", color = red)
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                if (selectedTab == 2) {
-                    if (playlists.isEmpty()) {
+                when {
+                    !permissionGranted -> {
                         Box(
                             Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "No playlists yet. Tap Create.",
-                                color = muted
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(playlists.keys.toList()) { name ->
-                                Column(
-                                    Modifier.fillMaxWidth()
-                                        .background(
-                                            surface,
-                                            RoundedCornerShape(12.dp)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = RED,
+                                    modifier = Modifier.size(56.dp)
+                                )
+                                Text(
+                                    "Let Soundwave access your music",
+                                    color = WHITE,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        permissionLauncher.launch(
+                                            Manifest.permission.READ_EXTERNAL_STORAGE
                                         )
-                                        .padding(12.dp)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = RED
+                                    )
                                 ) {
-                                    Text(
-                                        name,
-                                        color = white,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        "${playlists[name]?.size ?: 0} songs",
-                                        color = muted,
-                                        fontSize = 12.sp
-                                    )
+                                    Text("Grant music access")
+                                }
+                            }
+                        }
+                    }
 
-                                    playlists[name].orEmpty().forEach { song ->
-                                        Row(
-                                            Modifier.fillMaxWidth()
-                                                .clickable { playSong(song) }
-                                                .padding(vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                song.title,
-                                                color = white,
-                                                modifier = Modifier.weight(1f),
-                                                maxLines = 1
+                    tab == 2 -> {
+                        if (playlists.isEmpty()) {
+                            Box(
+                                Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Create your first playlist with +",
+                                    color = GREY
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(playlists.keys.toList()) { name ->
+                                    val playlistSongs = playlists[name].orEmpty()
+                                        .mapNotNull { uri ->
+                                            songs.find {
+                                                it.uri.toString() == uri
+                                            }
+                                        }
+
+                                    Column(
+                                        Modifier.fillMaxWidth()
+                                            .background(
+                                                CARD,
+                                                RoundedCornerShape(14.dp)
                                             )
-                                            IconButton(
-                                                onClick = {
-                                                    playlists = playlists +
-                                                        (name to playlists[name].orEmpty()
-                                                            .filterNot {
-                                                                it.uri == song.uri
-                                                            })
-                                                }
+                                            .animateContentSize()
+                                            .padding(12.dp)
+                                    ) {
+                                        Text(
+                                            name,
+                                            color = WHITE,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            "${playlists[name]?.size ?: 0} saved tracks",
+                                            color = GREY,
+                                            fontSize = 12.sp
+                                        )
+
+                                        playlistSongs.forEach { song ->
+                                            Row(
+                                                Modifier.fillMaxWidth()
+                                                    .clickable {
+                                                        playSong(song)
+                                                    }
+                                                    .padding(vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text("×", color = red)
+                                                Text(
+                                                    song.title,
+                                                    color = WHITE,
+                                                    modifier = Modifier.weight(1f),
+                                                    maxLines = 1
+                                                )
+                                                IconButton(onClick = {
+                                                    playlists = playlists +
+                                                        (name to playlists[name]
+                                                            .orEmpty()
+                                                            .filterNot {
+                                                                it == song.uri.toString()
+                                                            })
+                                                }) {
+                                                    Icon(
+                                                        Icons.Default.Close,
+                                                        contentDescription = "Remove from playlist",
+                                                        tint = GREY
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -482,107 +626,164 @@ fun SoundwaveScreen(player: ExoPlayer) {
                             }
                         }
                     }
-                } else if (visibleSongs.isEmpty()) {
-                    Box(
-                        Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (selectedTab == 1)
-                                "No favourites yet. Tap ♡ beside a song."
-                            else
-                                "Add local music to get started.",
-                            color = muted
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        items(
-                            visibleSongs,
-                            key = { it.uri.toString() }
-                        ) { song ->
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .background(
-                                        surface,
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { playSong(song) }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    Modifier.size(42.dp)
+
+                    tab == 3 && search.isBlank() -> {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(artists.filter {
+                                it.contains(search, true)
+                            }) { artist ->
+                                Row(
+                                    Modifier.fillMaxWidth()
                                         .background(
-                                            Color(0xFF303030),
-                                            RoundedCornerShape(8.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                            CARD,
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { search = artist }
+                                        .padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("♫", color = red, fontSize = 23.sp)
-                                }
-
-                                Spacer(Modifier.width(10.dp))
-
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        song.title,
-                                        color = white,
-                                        maxLines = 1,
-                                        fontWeight = FontWeight.Medium
+                                    Icon(
+                                        Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = RED
                                     )
-                                    Text(
-                                        "Local audio",
-                                        color = muted,
-                                        fontSize = 11.sp
-                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column {
+                                        Text(artist, color = WHITE)
+                                        Text(
+                                            "${songs.count { it.artist == artist }} songs",
+                                            color = GREY,
+                                            fontSize = 12.sp
+                                        )
+                                    }
                                 }
+                            }
+                        }
+                    }
 
-                                IconButton(
-                                    onClick = {
-                                        favorites = if (
-                                            song.uri.toString() in favorites
-                                        ) {
-                                            favorites - song.uri.toString()
+                    visibleSongs.isEmpty() -> {
+                        Box(
+                            Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = RED,
+                                    modifier = Modifier.size(54.dp)
+                                )
+                                Text(
+                                    if (tab == 1) "No favourites yet"
+                                    else "Your music will appear here",
+                                    color = WHITE,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "Songs are scanned from your device",
+                                    color = GREY,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    else -> {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            items(
+                                visibleSongs,
+                                key = { it.uri.toString() }
+                            ) { song ->
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .background(
+                                            CARD,
+                                            RoundedCornerShape(13.dp)
+                                        )
+                                        .clickable { playSong(song) }
+                                        .padding(9.dp)
+                                        .animateContentSize(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        Modifier.size(46.dp)
+                                            .background(
+                                                Color(0xFF351515),
+                                                RoundedCornerShape(10.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.MusicNote,
+                                            contentDescription = null,
+                                            tint = RED,
+                                            modifier = Modifier.size(26.dp)
+                                        )
+                                    }
+
+                                    Spacer(Modifier.width(10.dp))
+
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            song.title,
+                                            color = WHITE,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                        Spacer(Modifier.height(3.dp))
+                                        Text(
+                                            song.artist,
+                                            color = GREY,
+                                            fontSize = 11.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+
+                                    IconButton(onClick = {
+                                        val uri = song.uri.toString()
+                                        favorites = if (uri in favorites) {
+                                            favorites - uri
                                         } else {
-                                            favorites + song.uri.toString()
+                                            favorites + uri
+                                        }
+                                    }) {
+                                        AnimatedContent(
+                                            targetState =
+                                                song.uri.toString() in favorites,
+                                            label = "favourite"
+                                        ) { isFavorite ->
+                                            Icon(
+                                                if (isFavorite)
+                                                    Icons.Default.Favorite
+                                                else
+                                                    Icons.Default.FavoriteBorder,
+                                                contentDescription = "Toggle favourite",
+                                                tint = RED
+                                            )
                                         }
                                     }
-                                ) {
-                                    Icon(
-                                        if (song.uri.toString() in favorites)
-                                            Icons.Default.Favorite
-                                        else
-                                            Icons.Default.FavoriteBorder,
-                                        contentDescription = "Toggle favourite",
-                                        tint = red
-                                    )
-                                }
 
-                                IconButton(
-                                    onClick = {
-                                        songForPlaylist = song
-                                        showPlaylistPicker = true
+                                    IconButton(onClick = {
+                                        songToAdd = song
+                                    }) {
+                                        Icon(
+                                            Icons.Default.Add,
+                                            contentDescription = "Add to playlist",
+                                            tint = GREY
+                                        )
                                     }
-                                ) {
-                                    Icon(
-                                        Icons.Default.Add,
-                                        contentDescription = "Add to playlist",
-                                        tint = white
-                                    )
-                                }
 
-                                IconButton(
-                                    onClick = { playSong(song) }
-                                ) {
-                                    Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = "Play",
-                                        tint = red
-                                    )
+                                    IconButton(onClick = { playSong(song) }) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Play",
+                                            tint = WHITE
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -591,55 +792,41 @@ fun SoundwaveScreen(player: ExoPlayer) {
             }
         }
 
-        if (showCreatePlaylist) {
+        if (showCreate) {
             AlertDialog(
-                onDismissRequest = {
-                    showCreatePlaylist = false
-                },
-                title = { Text("Create playlist") },
+                onDismissRequest = { showCreate = false },
+                title = { Text("New playlist") },
                 text = {
                     OutlinedTextField(
                         value = playlistName,
                         onValueChange = { playlistName = it },
-                        label = { Text("Playlist name") },
-                        singleLine = true
+                        singleLine = true,
+                        label = { Text("Playlist name") }
                     )
                 },
                 confirmButton = {
-                    TextButton(
-                        onClick = {
-                            val name = playlistName.trim()
-                            if (name.isNotEmpty() &&
-                                name !in playlists
-                            ) {
-                                playlists = playlists + (name to emptyList())
-                            }
-                            showCreatePlaylist = false
+                    TextButton(onClick = {
+                        val name = playlistName.trim()
+                        if (name.isNotEmpty() && name !in playlists) {
+                            playlists = playlists + (name to emptyList())
                         }
-                    ) {
-                        Text("Create")
+                        showCreate = false
+                    }) {
+                        Text("Create", color = RED)
                     }
                 },
                 dismissButton = {
-                    TextButton(
-                        onClick = {
-                            showCreatePlaylist = false
-                        }
-                    ) {
+                    TextButton(onClick = { showCreate = false }) {
                         Text("Cancel")
                     }
                 }
             )
         }
 
-        if (showPlaylistPicker) {
+        songToAdd?.let { song ->
             AlertDialog(
-                onDismissRequest = {
-                    showPlaylistPicker = false
-                },
-                title = {
-                    Text("Add to playlist")
-                },
+                onDismissRequest = { songToAdd = null },
+                title = { Text("Add to playlist") },
                 text = {
                     if (playlists.isEmpty()) {
                         Text("Create a playlist first in the Playlists tab.")
@@ -648,35 +835,48 @@ fun SoundwaveScreen(player: ExoPlayer) {
                             playlists.keys.forEach { name ->
                                 Text(
                                     name,
+                                    color = WHITE,
                                     modifier = Modifier.fillMaxWidth()
                                         .clickable {
-                                            val song = songForPlaylist
-                                            if (song != null) {
-                                                val existing =
-                                                    playlists[name].orEmpty()
-                                                if (existing.none {
-                                                    it.uri == song.uri
-                                                }) {
-                                                    playlists = playlists +
-                                                        (name to (existing + song))
-                                                }
+                                            val uri = song.uri.toString()
+                                            val old = playlists[name].orEmpty()
+                                            if (uri !in old) {
+                                                playlists = playlists +
+                                                    (name to (old + uri))
                                             }
-                                            showPlaylistPicker = false
+                                            songToAdd = null
                                         }
-                                        .padding(12.dp),
-                                    color = white
+                                        .padding(12.dp)
                                 )
                             }
                         }
                     }
                 },
                 confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showPlaylistPicker = false
-                        }
-                    ) {
+                    TextButton(onClick = { songToAdd = null }) {
                         Text("Close")
+                    }
+                }
+            )
+        }
+
+        if (showSettings) {
+            AlertDialog(
+                onDismissRequest = { showSettings = false },
+                title = { Text("Soundwave Settings") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Theme: Black & Red")
+                        Text("Library: Automatic device scan")
+                        Text("Favourites and playlists: Saved locally")
+                        Text("Music found: ${songs.size}")
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showSettings = false
+                    }) {
+                        Text("Done", color = RED)
                     }
                 }
             )
