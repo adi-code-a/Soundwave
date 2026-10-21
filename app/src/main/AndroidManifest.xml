@@ -1,10 +1,13 @@
 
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Android 6 to Android 12 -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Android 13 and newer -->
     <uses-permission
         android:name="android.permission.READ_MEDIA_AUDIO" />
 
@@ -25,5 +28,7 @@
             </intent-filter>
 
         </activity>
+
     </application>
+
 </manifest>
