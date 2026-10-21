@@ -36,14 +36,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         player = ExoPlayer.Builder(this).build()
-        setContent { SoundwaveScreen(player!!) }
+        setContent { SoundwaveStartup(player!!) }
     }
     override fun onDestroy() { player?.release(); player = null; super.onDestroy() }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SoundwaveScreen(player: ExoPlayer) {
+fun SoundwaveScreen(player: ExoPlayer) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var songs by remember { mutableStateOf(listOf<Song>()) }
     var current by remember { mutableStateOf<Song?>(null) }
