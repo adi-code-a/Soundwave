@@ -1,3 +1,4 @@
+
 package com.example.soundwave
 
 import android.Manifest
@@ -11,21 +12,33 @@ import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,6 +48,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -56,12 +70,11 @@ private val RED = Color(0xFFFF3030)
 private val WHITE = Color(0xFFF5F5F5)
 private val GREY = Color(0xFFAAAAAA)
 
-private fun loadFavorites(context: Context): Set<String> {
-    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+private fun loadFavorites(context: Context): Set<String> =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         .getStringSet("favorites", emptySet())
         ?.toSet()
         ?: emptySet()
-}
 
 private fun saveFavorites(context: Context, values: Set<String>) {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -72,8 +85,7 @@ private fun saveFavorites(context: Context, values: Set<String>) {
 
 private fun loadPlaylists(context: Context): Map<String, List<String>> {
     val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        .getString("playlists", null)
-        ?: return emptyMap()
+        .getString("playlists", null) ?: return emptyMap()
 
     return try {
         val json = JSONObject(raw)
@@ -83,11 +95,8 @@ private fun loadPlaylists(context: Context): Map<String, List<String>> {
         while (keys.hasNext()) {
             val name = keys.next()
             val array = json.getJSONArray(name)
-            result[name] = List(array.length()) { index ->
-                array.getString(index)
-            }
+            result[name] = List(array.length()) { array.getString(it) }
         }
-
         result
     } catch (_: Exception) {
         emptyMap()
@@ -99,7 +108,6 @@ private fun savePlaylists(
     playlists: Map<String, List<String>>
 ) {
     val json = JSONObject()
-
     playlists.forEach { (name, uris) ->
         json.put(name, JSONArray(uris))
     }
@@ -131,7 +139,6 @@ private suspend fun scanMusic(context: Context): List<Song> =
             null,
             "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
         )?.use { cursor ->
-
             val idColumn = cursor.getColumnIndexOrThrow(
                 MediaStore.Audio.Media._ID
             )
@@ -152,17 +159,17 @@ private suspend fun scanMusic(context: Context): List<Song> =
             )
 
             while (cursor.moveToNext()) {
-                val id = cursor.getLong(idColumn)
-                val uri = ContentUris.withAppendedId(collection, id)
+                val uri = ContentUris.withAppendedId(
+                    collection,
+                    cursor.getLong(idColumn)
+                )
 
                 val title = cursor.getString(titleColumn)
                     ?.takeIf { it.isNotBlank() }
                     ?: "Unknown song"
 
                 val artist = cursor.getString(artistColumn)
-                    ?.takeUnless {
-                        it.isBlank() || it == "<unknown>"
-                    }
+                    ?.takeUnless { it.isBlank() || it == "<unknown>" }
                     ?: "Unknown artist"
 
                 result.add(
@@ -177,28 +184,92 @@ private suspend fun scanMusic(context: Context): List<Song> =
                 )
             }
         }
-
         result
     }
 
 private fun formatDuration(milliseconds: Long): String {
-    if (milliseconds <= 0L) return "--:--"
-
+    if (milliseconds <= 0L) return "0:00"
     val seconds = milliseconds / 1000
     return "%d:%02d".format(seconds / 60, seconds % 60)
 }
 
 class MainActivity : ComponentActivity() {
-
     private var player: ExoPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        player = ExoPlayer.Builder(this).build()
+        val exoPlayer = ExoPlayer.Builder(this).build()
+        player = exoPlayer
 
         setContent {
-            SoundwaveScreen(player = player!!)
+            var showSplash by remember { mutableStateOf(true) }
+
+            LaunchedEffect(Unit) {
+                delay(1800)
+                showSplash = false
+            }
+
+            if (showSplash) {
+                val transition = rememberInfiniteTransition(
+                    label = "soundwave_splash"
+                )
+
+                val logoScale by transition.animateFloat(
+                    initialValue = 0.88f,
+                    targetValue = 1.08f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(
+                            700,
+                            easing = FastOutSlowInEasing
+                        ),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "logo_scale"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(BG),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Image(
+                            painter = painterResource(
+                                id = R.drawable.ic_soundwave_launcher
+                            ),
+                            contentDescription = "Soundwave logo",
+                            modifier = Modifier
+                                .size(120.dp)
+                                .scale(logoScale)
+                        )
+
+                        Spacer(Modifier.height(22.dp))
+
+                        Text(
+                            "SOUNDWAVE",
+                            color = WHITE,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 4.sp
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Text(
+                            "YOUR MUSIC. YOUR WAY.",
+                            color = RED,
+                            fontSize = 10.sp,
+                            letterSpacing = 2.sp
+                        )
+                    }
+                }
+            } else {
+                SoundwaveScreen(exoPlayer)
+            }
         }
     }
 
@@ -212,7 +283,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SoundwaveScreen(player: ExoPlayer) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
 
     val audioPermission =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -228,6 +299,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
     var current by remember { mutableStateOf<Song?>(null) }
     var playQueue by remember { mutableStateOf(emptyList<Song>()) }
     var playing by remember { mutableStateOf(false) }
+    var fullPlayer by remember { mutableStateOf(false) }
 
     var permissionGranted by remember {
         mutableStateOf(
@@ -238,7 +310,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
         )
     }
 
-    var status by remember { mutableStateOf("Checking music access…") }
+    var status by remember { mutableStateOf("Ready to play") }
     var tab by remember { mutableIntStateOf(0) }
     var search by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf("Name") }
@@ -247,23 +319,25 @@ fun SoundwaveScreen(player: ExoPlayer) {
     var showSettings by remember { mutableStateOf(false) }
     var showCreate by remember { mutableStateOf(false) }
     var showAddToPlaylist by remember { mutableStateOf(false) }
-
     var playlistName by remember { mutableStateOf("") }
     var songToAdd by remember { mutableStateOf<Song?>(null) }
     var selectedArtist by remember { mutableStateOf<String?>(null) }
     var selectedPlaylist by remember { mutableStateOf<String?>(null) }
     var refreshCounter by remember { mutableIntStateOf(0) }
+    var shuffleEnabled by remember {
+        mutableStateOf(player.shuffleModeEnabled)
+    }
+    var repeatMode by remember { mutableIntStateOf(player.repeatMode) }
 
     val permissionLauncher =
         rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
             permissionGranted = granted
-
             status = if (granted) {
                 "Music access granted"
             } else {
-                "Music access denied. Grant permission in settings."
+                "Music access denied. Allow audio access in settings."
             }
         }
 
@@ -275,8 +349,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
 
     LaunchedEffect(permissionGranted, refreshCounter) {
         if (permissionGranted) {
-            status = "Scanning your music…"
-
+            status = "Scanning your music..."
             try {
                 songs = scanMusic(context)
                 status = "${songs.size} songs in your library"
@@ -305,7 +378,6 @@ fun SoundwaveScreen(player: ExoPlayer) {
                 reason: Int
             ) {
                 val uri = mediaItem?.localConfiguration?.uri ?: return
-
                 playQueue.firstOrNull { it.uri == uri }?.let {
                     current = it
                 }
@@ -313,10 +385,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
         }
 
         player.addListener(listener)
-
-        onDispose {
-            player.removeListener(listener)
-        }
+        onDispose { player.removeListener(listener) }
     }
 
     fun playSong(song: Song, queue: List<Song>) {
@@ -327,34 +396,31 @@ fun SoundwaveScreen(player: ExoPlayer) {
         current = song
         playQueue = actualQueue
 
-        player.setMediaItems(
-            actualQueue.map { MediaItem.fromUri(it.uri) }
-        )
+        player.setMediaItems(actualQueue.map {
+            MediaItem.fromUri(it.uri)
+        })
         player.seekTo(index, 0L)
         player.prepare()
         player.play()
+        fullPlayer = true
     }
 
     fun toggleFavorite(song: Song) {
         val key = song.uri.toString()
-
-        favorites = if (key in favorites) {
-            favorites - key
-        } else {
-            favorites + key
-        }
+        favorites = if (key in favorites) favorites - key
+        else favorites + key
     }
 
     fun createPlaylist() {
         val name = playlistName.trim()
 
-        if (name.isEmpty()) {
-            status = "Enter a playlist name."
-        } else if (name in playlists) {
-            status = "That playlist already exists."
-        } else {
-            playlists = playlists + (name to emptyList())
-            status = "Created playlist: $name"
+        when {
+            name.isEmpty() -> status = "Enter a playlist name."
+            name in playlists -> status = "That playlist already exists."
+            else -> {
+                playlists = playlists + (name to emptyList())
+                status = "Created playlist: $name"
+            }
         }
 
         playlistName = ""
@@ -380,6 +446,25 @@ fun SoundwaveScreen(player: ExoPlayer) {
         ).show()
     }
 
+    fun requestAddToPlaylist(song: Song) {
+        songToAdd = song
+        showAddToPlaylist = true
+    }
+
+    fun toggleShuffle() {
+        shuffleEnabled = !shuffleEnabled
+        player.shuffleModeEnabled = shuffleEnabled
+    }
+
+    fun cycleRepeat() {
+        repeatMode = when (repeatMode) {
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+            else -> Player.REPEAT_MODE_OFF
+        }
+        player.repeatMode = repeatMode
+    }
+
     val artists = songs
         .map { it.artist }
         .distinct()
@@ -393,18 +478,14 @@ fun SoundwaveScreen(player: ExoPlayer) {
     val baseSongs = when (tab) {
         1 -> songs.filter { it.uri.toString() in favorites }
 
-        2 -> {
-            selectedPlaylist?.let { name ->
-                val savedUris = playlists[name].orEmpty().toSet()
-                songs.filter { it.uri.toString() in savedUris }
-            }.orEmpty()
-        }
+        2 -> selectedPlaylist?.let { name ->
+            val savedUris = playlists[name].orEmpty().toSet()
+            songs.filter { it.uri.toString() in savedUris }
+        }.orEmpty()
 
-        3 -> {
-            selectedArtist?.let { artist ->
-                songs.filter { it.artist == artist }
-            }.orEmpty()
-        }
+        3 -> selectedArtist?.let { artist ->
+            songs.filter { it.artist == artist }
+        }.orEmpty()
 
         else -> songs
     }
@@ -425,6 +506,10 @@ fun SoundwaveScreen(player: ExoPlayer) {
             }
         }
 
+    BackHandler(enabled = fullPlayer) {
+        fullPlayer = false
+    }
+
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = RED,
@@ -438,565 +523,445 @@ fun SoundwaveScreen(player: ExoPlayer) {
             containerColor = BG,
 
             topBar = {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(
-                                text = "Soundwave",
-                                color = WHITE,
-                                fontSize = 25.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "YOUR MUSIC. YOUR WAY.",
-                                color = RED,
-                                fontSize = 10.sp,
-                                letterSpacing = 2.sp
-                            )
-                        }
-                    },
-                    actions = {
-                        TextButton(
-                            onClick = { showSettings = true }
-                        ) {
-                            Text("⚙", color = WHITE, fontSize = 22.sp)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = BG
+                if (!fullPlayer) {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text(
+                                    "Soundwave",
+                                    color = WHITE,
+                                    fontSize = 25.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "YOUR MUSIC. YOUR WAY.",
+                                    color = RED,
+                                    fontSize = 10.sp,
+                                    letterSpacing = 2.sp
+                                )
+                            }
+                        },
+                        actions = {
+                            if (tab == 2) {
+                                TextButton(onClick = {
+                                    showCreate = true
+                                }) {
+                                    Text("+ Playlist", color = RED)
+                                }
+                            }
+                            TextButton(onClick = {
+                                showSettings = true
+                            }) {
+                                Text("⚙", color = WHITE, fontSize = 23.sp)
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = BG
+                        )
                     )
-                )
+                }
             },
 
             bottomBar = {
-                Column {
-                    current?.let { song ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFF241818))
-                                .padding(horizontal = 4.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "♫",
-                                color = RED,
-                                fontSize = 27.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            )
-
-                            Column(
-                                modifier = Modifier.weight(1f)
+                if (!fullPlayer) {
+                    Column {
+                        current?.let { song ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF241414))
+                                    .clickable { fullPlayer = true }
+                                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = song.title,
-                                    color = WHITE,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = song.artist,
-                                    color = GREY,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            TextButton(
-                                onClick = {
-                                    player.seekToPreviousMediaItem()
+                                Box(
+                                    modifier = Modifier
+                                        .size(43.dp)
+                                        .background(
+                                            Color(0xFF351515),
+                                            RoundedCornerShape(10.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "♫",
+                                        color = RED,
+                                        fontSize = 25.sp
+                                    )
                                 }
-                            ) {
-                                Text("◀|", color = WHITE)
-                            }
 
-                            TextButton(
-                                onClick = {
+                                Spacer(Modifier.width(10.dp))
+
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        song.title,
+                                        color = WHITE,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        song.artist,
+                                        color = GREY,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                TextButton(onClick = {
+                                    player.seekToPreviousMediaItem()
+                                }) {
+                                    Text("⏮", color = WHITE, fontSize = 19.sp)
+                                }
+
+                                TextButton(onClick = {
                                     if (playing) player.pause()
                                     else player.play()
+                                }) {
+                                    Text(
+                                        if (playing) "Ⅱ" else "▶",
+                                        color = RED,
+                                        fontSize = 22.sp
+                                    )
                                 }
-                            ) {
-                                Text(
-                                    text = if (playing) "Ⅱ" else "▶",
-                                    color = RED,
-                                    fontSize = 20.sp
-                                )
-                            }
 
-                            TextButton(
-                                onClick = {
+                                TextButton(onClick = {
                                     player.seekToNextMediaItem()
+                                }) {
+                                    Text("⏭", color = WHITE, fontSize = 19.sp)
                                 }
-                            ) {
-                                Text("|▶", color = WHITE)
                             }
                         }
-                    }
 
-                    NavigationBar(
-                        containerColor = Color(0xFF111111)
-                    ) {
-                        val labels = listOf(
-                            "Songs",
-                            "Favourites",
-                            "Playlists",
-                            "Artists"
-                        )
-
-                        val symbols = listOf("♫", "♥", "▤", "♟")
-
-                        labels.forEachIndexed { index, label ->
-                            NavigationBarItem(
-                                selected = tab == index,
-                                onClick = {
-                                    tab = index
-                                    search = ""
-                                    selectedArtist = null
-                                    selectedPlaylist = null
-                                },
-                                icon = {
-                                    Text(
-                                        text = symbols[index],
-                                        fontSize = 18.sp
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = label,
-                                        fontSize = 9.sp,
-                                        maxLines = 1
-                                    )
-                                },
-                                alwaysShowLabel = true,
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = RED,
-                                    selectedTextColor = RED,
-                                    indicatorColor = Color(0xFF351515),
-                                    unselectedIconColor = GREY,
-                                    unselectedTextColor = GREY
-                                )
+                        NavigationBar(
+                            containerColor = Color(0xFF111111)
+                        ) {
+                            val labels = listOf(
+                                "Songs", "Favourites", "Playlists", "Artists"
                             )
+                            val symbols = listOf("♫", "♥", "▤", "♟")
+
+                            labels.forEachIndexed { index, label ->
+                                NavigationBarItem(
+                                    selected = tab == index,
+                                    onClick = {
+                                        tab = index
+                                        search = ""
+                                        selectedArtist = null
+                                        selectedPlaylist = null
+                                    },
+                                    icon = {
+                                        Text(
+                                            symbols[index],
+                                            fontSize = 18.sp
+                                        )
+                                    },
+                                    label = {
+                                        Text(label, fontSize = 9.sp, maxLines = 1)
+                                    },
+                                    alwaysShowLabel = true,
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = RED,
+                                        selectedTextColor = RED,
+                                        indicatorColor = Color(0xFF351515),
+                                        unselectedIconColor = GREY,
+                                        unselectedTextColor = GREY
+                                    )
+                                )
+                            }
                         }
                     }
                 }
             }
         ) { innerPadding ->
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("Search music") },
-                    placeholder = { Text("Song, artist or file type") },
-                    trailingIcon = {
-                        if (search.isNotEmpty()) {
-                            TextButton(onClick = { search = "" }) {
-                                Text("Clear")
-                            }
-                        }
+            if (fullPlayer) {
+                FullPlayerScreen(
+                    player = player,
+                    current = current,
+                    playing = playing,
+                    favorites = favorites,
+                    shuffleEnabled = shuffleEnabled,
+                    repeatMode = repeatMode,
+                    onBack = { fullPlayer = false },
+                    onToggleFavorite = {
+                        current?.let { toggleFavorite(it) }
                     },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = RED,
-                        focusedLabelColor = RED,
-                        cursorColor = RED
+                    onAddToPlaylist = {
+                        current?.let { requestAddToPlaylist(it) }
+                    },
+                    onToggleShuffle = { toggleShuffle() },
+                    onCycleRepeat = { cycleRepeat() }
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("Search music") },
+                        placeholder = { Text("Song, artist or file type") },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = RED,
+                            cursorColor = RED,
+                            focusedLabelColor = RED
+                        )
                     )
-                )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(Modifier.height(8.dp))
 
-                Text(
-                    text = status,
-                    color = GREY,
-                    fontSize = 11.sp
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (!permissionGranted) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                    if (tab == 0 || tab == 1 ||
+                        (tab == 2 && selectedPlaylist != null) ||
+                        (tab == 3 && selectedArtist != null)
                     ) {
-                        Text(
-                            text = "Allow Soundwave to access your music.",
-                            color = WHITE
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Button(
-                            onClick = {
-                                permissionLauncher.launch(audioPermission)
-                            }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Grant music access")
-                        }
-                    }
-                } else if (tab == 3 && selectedArtist == null) {
-                    Text(
-                        text = "Artists",
-                        color = WHITE,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                            Text(
+                                when (tab) {
+                                    1 -> "Favourites"
+                                    2 -> selectedPlaylist ?: "Playlists"
+                                    3 -> selectedArtist ?: "Artists"
+                                    else -> "All songs"
+                                },
+                                color = WHITE,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp
+                            )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    if (artists.isEmpty()) {
-                        Text(
-                            text = "No artists found.",
-                            color = GREY
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        ) {
-                            items(artists, key = { it }) { artist ->
-                                val count = songs.count {
-                                    it.artist == artist
+                            Box {
+                                TextButton(onClick = {
+                                    sortMenu = true
+                                }) {
+                                    Text("Sort: $sort ▾", color = RED)
                                 }
 
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp)
-                                        .clickable {
-                                            selectedArtist = artist
-                                        },
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = CARD
-                                    )
+                                DropdownMenu(
+                                    expanded = sortMenu,
+                                    onDismissRequest = { sortMenu = false },
+                                    modifier = Modifier.background(CARD)
                                 ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "♫",
-                                            color = RED,
-                                            fontSize = 25.sp
+                                    listOf(
+                                        "Name", "Artist", "Date added",
+                                        "Type", "Duration"
+                                    ).forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text(option, color = WHITE) },
+                                            onClick = {
+                                                sort = option
+                                                sortMenu = false
+                                            }
                                         )
-
-                                        Column(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(start = 12.dp)
-                                        ) {
-                                            Text(
-                                                text = artist,
-                                                color = WHITE,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                text = "$count songs",
-                                                color = GREY,
-                                                fontSize = 12.sp
-                                            )
-                                        }
-
-                                        Text("›", color = RED, fontSize = 25.sp)
                                     }
                                 }
                             }
                         }
                     }
-                } else if (tab == 2 && selectedPlaylist == null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Playlists",
-                            color = WHITE,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
 
-                        Button(
-                            onClick = {
-                                playlistName = ""
-                                showCreate = true
-                            }
-                        ) {
-                            Text("+ New")
+                    when {
+                        !permissionGranted -> {
+                            EmptyMessage(
+                                "Music permission is needed to scan your songs."
+                            )
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                        tab == 2 && selectedPlaylist == null -> {
+                            Text(
+                                "Your playlists",
+                                color = WHITE,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
 
-                    if (playlistNames.isEmpty()) {
-                        Text(
-                            text = "No playlists yet. Create one to get started.",
-                            color = GREY
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        ) {
-                            items(playlistNames, key = { it }) { name ->
-                                val count = playlists[name].orEmpty().size
-
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp)
-                                        .clickable {
-                                            selectedPlaylist = name
-                                        },
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = CARD
-                                    )
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "▤",
-                                            color = RED,
-                                            fontSize = 24.sp
-                                        )
-
-                                        Column(
+                            if (playlistNames.isEmpty()) {
+                                EmptyMessage(
+                                    "No playlists yet. Tap + Playlist to create one."
+                                )
+                            } else {
+                                LazyColumn {
+                                    items(playlistNames) { name ->
+                                        Card(
                                             modifier = Modifier
-                                                .weight(1f)
-                                                .padding(start = 12.dp)
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                                .clickable {
+                                                    selectedPlaylist = name
+                                                    search = ""
+                                                },
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = CARD
+                                            ),
+                                            shape = RoundedCornerShape(14.dp)
                                         ) {
-                                            Text(
-                                                text = name,
-                                                color = WHITE,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                text = "$count saved tracks",
-                                                color = GREY,
-                                                fontSize = 12.sp
-                                            )
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(16.dp),
+                                                verticalAlignment =
+                                                    Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    "▤",
+                                                    color = RED,
+                                                    fontSize = 27.sp
+                                                )
+                                                Spacer(Modifier.width(12.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(
+                                                        name,
+                                                        color = WHITE,
+                                                        fontWeight =
+                                                            FontWeight.SemiBold
+                                                    )
+                                                    Text(
+                                                        "${playlists[name].orEmpty().size} saved songs",
+                                                        color = GREY,
+                                                        fontSize = 12.sp
+                                                    )
+                                                }
+                                                Text("›", color = RED, fontSize = 25.sp)
+                                            }
                                         }
-
-                                        Text("›", color = RED, fontSize = 25.sp)
                                     }
                                 }
                             }
                         }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f)
-                        ) {
+
+                        tab == 3 && selectedArtist == null -> {
+                            Text(
+                                "Artists",
+                                color = WHITE,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            if (artists.isEmpty()) {
+                                EmptyMessage("No artists found.")
+                            } else {
+                                LazyColumn {
+                                    items(artists) { artist ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                                .background(
+                                                    CARD,
+                                                    RoundedCornerShape(12.dp)
+                                                )
+                                                .clickable {
+                                                    selectedArtist = artist
+                                                    search = ""
+                                                }
+                                                .padding(16.dp),
+                                            verticalAlignment =
+                                                Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "♫",
+                                                color = RED,
+                                                fontSize = 24.sp
+                                            )
+                                            Spacer(Modifier.width(12.dp))
+                                            Text(
+                                                artist,
+                                                color = WHITE,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Text("›", color = RED, fontSize = 25.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        else -> {
                             if (tab == 2 && selectedPlaylist != null) {
-                                TextButton(
-                                    onClick = { selectedPlaylist = null },
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Text("← All playlists", color = RED)
+                                TextButton(onClick = {
+                                    selectedPlaylist = null
+                                    search = ""
+                                }) {
+                                    Text("‹ All playlists", color = RED)
                                 }
                             }
 
                             if (tab == 3 && selectedArtist != null) {
-                                TextButton(
-                                    onClick = { selectedArtist = null },
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Text("← All artists", color = RED)
+                                TextButton(onClick = {
+                                    selectedArtist = null
+                                    search = ""
+                                }) {
+                                    Text("‹ All artists", color = RED)
                                 }
                             }
 
                             Text(
-                                text = when (tab) {
-                                    1 -> "Favourites"
-                                    2 -> selectedPlaylist ?: "Playlist"
-                                    3 -> selectedArtist ?: "Artist"
-                                    else -> "All songs"
-                                },
-                                color = WHITE,
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-
-                            Text(
-                                text = "${visibleSongs.size} songs",
+                                "${visibleSongs.size} songs",
                                 color = GREY,
-                                fontSize = 11.sp
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(vertical = 5.dp)
                             )
-                        }
 
-                        Box {
-                            OutlinedButton(
-                                onClick = { sortMenu = true },
-                                contentPadding = PaddingValues(
-                                    horizontal = 10.dp,
-                                    vertical = 6.dp
+                            if (visibleSongs.isEmpty()) {
+                                EmptyMessage(
+                                    if (songs.isEmpty()) status
+                                    else "No songs found here."
                                 )
-                            ) {
-                                Text(
-                                    text = "Sort",
-                                    color = RED
-                                )
-                            }
-
-                            DropdownMenu(
-                                expanded = sortMenu,
-                                onDismissRequest = { sortMenu = false }
-                            ) {
-                                listOf(
-                                    "Name",
-                                    "Artist",
-                                    "Date added",
-                                    "Type",
-                                    "Duration"
-                                ).forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option) },
-                                        onClick = {
-                                            sort = option
-                                            sortMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    if (visibleSongs.isEmpty()) {
-                        Text(
-                            text = when (tab) {
-                                1 -> "No favourite songs yet. Tap ♡ beside a song."
-                                2 -> "This playlist has no matching songs."
-                                3 -> "No songs found for this artist."
-                                else -> "No songs found on this device."
-                            },
-                            color = GREY
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        ) {
-                            items(
-                                items = visibleSongs,
-                                key = { it.uri.toString() }
-                            ) { song ->
-                                val isFavorite =
-                                    song.uri.toString() in favorites
-
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = CARD
-                                    )
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
+                            } else {
+                                LazyColumn {
+                                    items(
+                                        items = visibleSongs,
+                                        key = { it.uri.toString() }
+                                    ) { song ->
+                                        SongRow(
+                                            song = song,
+                                            isFavorite =
+                                                song.uri.toString() in favorites,
+                                            onPlay = {
                                                 playSong(song, visibleSongs)
-                                            }
-                                            .padding(
-                                                start = 10.dp,
-                                                end = 4.dp,
-                                                top = 10.dp,
-                                                bottom = 10.dp
-                                            ),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = if (current?.uri == song.uri) {
-                                                "▶"
-                                            } else {
-                                                "♫"
                                             },
-                                            color = RED,
-                                            fontSize = 22.sp
-                                        )
-
-                                        Column(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(horizontal = 10.dp)
-                                        ) {
-                                            Text(
-                                                text = song.title,
-                                                color = WHITE,
-                                                fontWeight = FontWeight.SemiBold,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-
-                                            Text(
-                                                text = song.artist,
-                                                color = GREY,
-                                                fontSize = 11.sp,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-
-                                            Text(
-                                                text = formatDuration(song.duration),
-                                                color = GREY,
-                                                fontSize = 10.sp
-                                            )
-                                        }
-
-                                        TextButton(
-                                            onClick = {
+                                            onToggleFavorite = {
                                                 toggleFavorite(song)
                                             },
-                                            contentPadding = PaddingValues(4.dp)
-                                        ) {
-                                            Text(
-                                                text = if (isFavorite) "♥" else "♡",
-                                                color = RED,
-                                                fontSize = 21.sp
-                                            )
-                                        }
-
-                                        TextButton(
-                                            onClick = {
-                                                songToAdd = song
-                                                showAddToPlaylist = true
+                                            onAddToPlaylist = {
+                                                requestAddToPlaylist(song)
                                             },
-                                            contentPadding = PaddingValues(4.dp)
-                                        ) {
-                                            Text(
-                                                text = "+",
-                                                color = WHITE,
-                                                fontSize = 21.sp
-                                            )
-                                        }
+                                            onPlayNext = {
+                                                val queue = playQueue.toMutableList()
+                                                queue.removeAll {
+                                                    it.uri == song.uri
+                                                }
+                                                val insertAt =
+                                                    (player.currentMediaItemIndex + 1)
+                                                        .coerceIn(0, queue.size)
+                                                queue.add(insertAt, song)
+                                                playQueue = queue
+
+                                                if (current == null) {
+                                                    playSong(song, listOf(song))
+                                                } else {
+                                                    player.addMediaItem(
+                                                        player.currentMediaItemIndex + 1,
+                                                        MediaItem.fromUri(song.uri)
+                                                    )
+                                                    Toast.makeText(
+                                                        context,
+                                                        "Added to the queue",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            }
+                                        )
                                     }
                                 }
                             }
@@ -1009,20 +974,14 @@ fun SoundwaveScreen(player: ExoPlayer) {
         if (showCreate) {
             AlertDialog(
                 onDismissRequest = { showCreate = false },
-                title = {
-                    Text("Create playlist")
-                },
+                containerColor = CARD,
+                title = { Text("Create playlist", color = WHITE) },
                 text = {
                     OutlinedTextField(
                         value = playlistName,
                         onValueChange = { playlistName = it },
-                        singleLine = true,
                         label = { Text("Playlist name") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = RED,
-                            focusedLabelColor = RED,
-                            cursorColor = RED
-                        )
+                        singleLine = true
                     )
                 },
                 confirmButton = {
@@ -1032,7 +991,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                 },
                 dismissButton = {
                     TextButton(onClick = { showCreate = false }) {
-                        Text("Cancel")
+                        Text("Cancel", color = GREY)
                     }
                 }
             )
@@ -1040,55 +999,45 @@ fun SoundwaveScreen(player: ExoPlayer) {
 
         if (showAddToPlaylist) {
             AlertDialog(
-                onDismissRequest = {
-                    showAddToPlaylist = false
-                    songToAdd = null
-                },
-                title = {
-                    Text("Add to playlist")
-                },
+                onDismissRequest = { showAddToPlaylist = false },
+                containerColor = CARD,
+                title = { Text("Add to playlist", color = WHITE) },
                 text = {
                     if (playlists.isEmpty()) {
-                        Text("You haven't created any playlists yet.")
+                        Text(
+                            "You have no playlists yet. Create one from the Playlists tab first.",
+                            color = WHITE
+                        )
                     } else {
                         Column(
-                            modifier = Modifier
-                                .heightIn(max = 300.dp)
-                                .verticalScroll(rememberScrollState())
+                            modifier = Modifier.verticalScroll(
+                                rememberScrollState()
+                            )
                         ) {
                             playlists.keys.sorted().forEach { name ->
                                 TextButton(
                                     onClick = { addSongToPlaylist(name) },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(
-                                        text = name,
-                                        color = WHITE
-                                    )
+                                    Text(name, color = WHITE)
                                 }
                             }
                         }
                     }
                 },
                 confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showAddToPlaylist = false
-                            songToAdd = null
-                        }
-                    ) {
-                        Text("Close")
+                    TextButton(onClick = { showAddToPlaylist = false }) {
+                        Text("Close", color = RED)
                     }
                 },
                 dismissButton = {
-                    TextButton(
-                        onClick = {
+                    if (playlists.isEmpty()) {
+                        TextButton(onClick = {
                             showAddToPlaylist = false
-                            playlistName = ""
                             showCreate = true
+                        }) {
+                            Text("Create playlist", color = RED)
                         }
-                    ) {
-                        Text("New playlist", color = RED)
                     }
                 }
             )
@@ -1097,66 +1046,517 @@ fun SoundwaveScreen(player: ExoPlayer) {
         if (showSettings) {
             AlertDialog(
                 onDismissRequest = { showSettings = false },
-                title = {
-                    Text("Soundwave settings")
-                },
+                containerColor = CARD,
+                title = { Text("Settings", color = WHITE) },
                 text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
+                    Column {
                         Text(
-                            text = "Local music player",
-                            color = WHITE,
-                            fontWeight = FontWeight.SemiBold
+                            "Soundwave Music Player",
+                            color = RED,
+                            fontWeight = FontWeight.Bold
                         )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
+                        Spacer(Modifier.height(8.dp))
+                        Text("Theme: Red and black", color = WHITE)
+                        Text("Music library: ${songs.size} songs", color = GREY)
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "Music library: $status",
-                            color = GREY,
-                            fontSize = 12.sp
-                        )
-
-                        TextButton(
-                            onClick = {
-                                refreshCounter++
-                            }
-                        ) {
-                            Text("Rescan music", color = RED)
-                        }
-
-                        TextButton(
-                            onClick = {
-                                permissionLauncher.launch(audioPermission)
-                            }
-                        ) {
-                            Text("Request music permission", color = RED)
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Favourites and playlists are saved on this device.",
-                            color = GREY,
-                            fontSize = 12.sp
-                        )
-
-                        Text(
-                            text = "Soundwave • Local Music",
+                            "Favourites and playlists are saved on this device.",
                             color = GREY,
                             fontSize = 12.sp
                         )
                     }
                 },
                 confirmButton = {
+                    TextButton(onClick = {
+                        showSettings = false
+                        refreshCounter++
+                    }) {
+                        Text("Rescan music", color = RED)
+                    }
+                },
+                dismissButton = {
                     TextButton(onClick = { showSettings = false }) {
-                        Text("Done", color = RED)
+                        Text("Close", color = WHITE)
                     }
                 }
             )
         }
+    }
+}
+
+@Composable
+private fun SongRow(
+    song: Song,
+    isFavorite: Boolean,
+    onPlay: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onPlayNext: () -> Unit
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .background(CARD, RoundedCornerShape(12.dp))
+            .clickable { onPlay() }
+            .padding(start = 10.dp, top = 8.dp, bottom = 8.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(43.dp)
+                .background(
+                    Color(0xFF351515),
+                    RoundedCornerShape(10.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("♫", color = RED, fontSize = 25.sp)
+        }
+
+        Spacer(Modifier.width(10.dp))
+
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                song.title,
+                color = WHITE,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                song.artist,
+                color = GREY,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "${formatDuration(song.duration)} · ${song.mimeType}",
+                color = GREY,
+                fontSize = 10.sp,
+                maxLines = 1
+            )
+        }
+
+        Box {
+            TextButton(onClick = { menuExpanded = true }) {
+                Text("⋮", color = WHITE, fontSize = 25.sp)
+            }
+
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                modifier = Modifier.background(CARD)
+            ) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (isFavorite) "Remove favourite"
+                            else "Add to favourites",
+                            color = WHITE
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onToggleFavorite()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Add to playlist", color = WHITE) },
+                    onClick = {
+                        menuExpanded = false
+                        onAddToPlaylist()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Play next", color = WHITE) },
+                    onClick = {
+                        menuExpanded = false
+                        onPlayNext()
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyMessage(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(28.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            message,
+            color = GREY,
+            fontSize = 14.sp
+        )
+    }
+}
+
+@Composable
+private fun FullPlayerScreen(
+    player: ExoPlayer,
+    current: Song?,
+    playing: Boolean,
+    favorites: Set<String>,
+    shuffleEnabled: Boolean,
+    repeatMode: Int,
+    onBack: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var dragging by remember { mutableStateOf(false) }
+    var seekPosition by remember { mutableFloatStateOf(0f) }
+
+    val isFavorite = current?.uri?.toString() in favorites
+
+    LaunchedEffect(current, player) {
+        while (true) {
+            if (!dragging) {
+                position = player.currentPosition.coerceAtLeast(0L)
+            }
+            duration = player.duration.takeIf {
+                it > 0L && it != androidx.media3.common.C.TIME_UNSET
+            } ?: (current?.duration ?: 0L)
+
+            delay(400)
+        }
+    }
+
+    val repeatLabel = when (repeatMode) {
+        Player.REPEAT_MODE_ONE -> "Repeat one"
+        Player.REPEAT_MODE_ALL -> "Repeat all"
+        else -> "Repeat off"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF301010), BG, BG)
+                )
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 22.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text("⌄", color = WHITE, fontSize = 30.sp)
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "NOW PLAYING",
+                    color = GREY,
+                    fontSize = 10.sp,
+                    letterSpacing = 2.sp
+                )
+                Text(
+                    "SOUNDWAVE",
+                    color = RED,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    letterSpacing = 2.sp
+                )
+            }
+
+            Box {
+                TextButton(onClick = { menuExpanded = true }) {
+                    Text("⋮", color = WHITE, fontSize = 30.sp)
+                }
+
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    modifier = Modifier.background(CARD)
+                ) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (isFavorite) "Remove favourite"
+                                else "Add to favourites",
+                                color = WHITE
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onToggleFavorite()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text("Add to playlist", color = WHITE)
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onAddToPlaylist()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (shuffleEnabled) "Turn shuffle off"
+                                else "Turn shuffle on",
+                                color = WHITE
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onToggleShuffle()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(repeatLabel, color = WHITE) },
+                        onClick = {
+                            menuExpanded = false
+                            onCycleRepeat()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Song details", color = WHITE) },
+                        onClick = {
+                            menuExpanded = false
+                            showDetails = true
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    Color(0xFF511919),
+                                    Color(0xFF1A1010),
+                                    Color(0xFF331010)
+                                )
+                            ),
+                            RoundedCornerShape(28.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "♫",
+                        color = RED,
+                        fontSize = 145.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(Modifier.height(28.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            current?.title ?: "Nothing playing",
+                            color = WHITE,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 23.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            current?.artist ?: "Choose a song from your library",
+                            color = GREY,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    TextButton(onClick = onToggleFavorite) {
+                        Text(
+                            if (isFavorite) "♥" else "♡",
+                            color = RED,
+                            fontSize = 29.sp
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(18.dp))
+
+                val safeDuration = duration.coerceAtLeast(1L)
+                Slider(
+                    value = if (dragging) seekPosition
+                    else position.coerceIn(0L, safeDuration).toFloat(),
+                    onValueChange = {
+                        dragging = true
+                        seekPosition = it
+                    },
+                    onValueChangeFinished = {
+                        player.seekTo(seekPosition.toLong())
+                        position = seekPosition.toLong()
+                        dragging = false
+                    },
+                    valueRange = 0f..safeDuration.toFloat(),
+                    enabled = current != null,
+                    colors = SliderDefaults.colors(
+                        thumbColor = RED,
+                        activeTrackColor = RED,
+                        inactiveTrackColor = Color(0xFF555555)
+                    )
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        formatDuration(
+                            if (dragging) seekPosition.toLong() else position
+                        ),
+                        color = GREY,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        formatDuration(duration),
+                        color = GREY,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Spacer(Modifier.height(18.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onToggleShuffle) {
+                        Text(
+                            if (shuffleEnabled) "🔀" else "⇄",
+                            color = if (shuffleEnabled) RED else GREY,
+                            fontSize = 23.sp
+                        )
+                    }
+
+                    TextButton(onClick = {
+                        player.seekToPreviousMediaItem()
+                    }) {
+                        Text("⏮", color = WHITE, fontSize = 31.sp)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .background(RED, RoundedCornerShape(50)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TextButton(
+                            onClick = {
+                                if (playing) player.pause()
+                                else player.play()
+                            }
+                        ) {
+                            Text(
+                                if (playing) "Ⅱ" else "▶",
+                                color = WHITE,
+                                fontSize = 31.sp
+                            )
+                        }
+                    }
+
+                    TextButton(onClick = {
+                        player.seekToNextMediaItem()
+                    }) {
+                        Text("⏭", color = WHITE, fontSize = 31.sp)
+                    }
+
+                    TextButton(onClick = onCycleRepeat) {
+                        Text(
+                            when (repeatMode) {
+                                Player.REPEAT_MODE_ONE -> "↻¹"
+                                Player.REPEAT_MODE_ALL -> "↻"
+                                else -> "↻"
+                            },
+                            color = if (repeatMode == Player.REPEAT_MODE_OFF)
+                                GREY else RED,
+                            fontSize = 23.sp
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                Text(
+                    "$repeatLabel   ·   ${if (shuffleEnabled) "Shuffle on" else "Shuffle off"}",
+                    color = GREY,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+    }
+
+    if (showDetails && current != null) {
+        AlertDialog(
+            onDismissRequest = { showDetails = false },
+            containerColor = CARD,
+            title = { Text("Song details", color = WHITE) },
+            text = {
+                Column {
+                    Text("Title: ${current.title}", color = WHITE)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Artist: ${current.artist}", color = WHITE)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Type: ${current.mimeType}", color = GREY)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Duration: ${formatDuration(current.duration)}",
+                        color = GREY
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDetails = false }) {
+                    Text("Close", color = RED)
+                }
+            }
+        )
     }
 }
