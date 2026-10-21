@@ -52,33 +52,26 @@ private val RED = Color(0xFFFF3030)
 private val WHITE = Color(0xFFF5F5F5)
 private val GREY = Color(0xFFAAAAAA)
 
-private fun prefs(context: Context) =
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
 private fun loadFavorites(context: Context): Set<String> =
-    prefs(context).getStringSet("favorites", emptySet())
-        ?.toSet() ?: emptySet()
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
 
 private fun saveFavorites(context: Context, values: Set<String>) {
-    prefs(context).edit()
-        .putStringSet("favorites", values.toSet()).apply()
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .edit().putStringSet("favorites", values.toSet()).apply()
 }
 
-private fun loadPlaylists(
-    context: Context
-): Map<String, List<String>> {
-    val raw = prefs(context).getString("playlists", null)
-        ?: return emptyMap()
-
+private fun loadPlaylists(context: Context): Map<String, List<String>> {
+    val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString("playlists", null) ?: return emptyMap()
     return try {
         val json = JSONObject(raw)
         val result = mutableMapOf<String, List<String>>()
         val keys = json.keys()
-
         while (keys.hasNext()) {
-            val key = keys.next()
-            val array = json.getJSONArray(key)
-            result[key] = List(array.length()) { array.getString(it) }
+            val name = keys.next()
+            val array = json.getJSONArray(name)
+            result[name] = List(array.length()) { array.getString(it) }
         }
         result
     } catch (_: Exception) {
@@ -88,20 +81,20 @@ private fun loadPlaylists(
 
 private fun savePlaylists(
     context: Context,
-    values: Map<String, List<String>>
+    playlists: Map<String, List<String>>
 ) {
     val json = JSONObject()
-    values.forEach { (name, uris) ->
+    playlists.forEach { (name, uris) ->
         json.put(name, JSONArray(uris))
     }
-    prefs(context).edit().putString("playlists", json.toString()).apply()
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .edit().putString("playlists", json.toString()).apply()
 }
 
 private suspend fun scanMusic(context: Context): List<Song> =
     withContext(Dispatchers.IO) {
         val result = mutableListOf<Song>()
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-
         val columns = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
@@ -115,24 +108,22 @@ private suspend fun scanMusic(context: Context): List<Song> =
             null,
             "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
         )?.use { cursor ->
-            val idCol = cursor.getColumnIndexOrThrow(
+            val idColumn = cursor.getColumnIndexOrThrow(
                 MediaStore.Audio.Media._ID
             )
-            val titleCol = cursor.getColumnIndexOrThrow(
+            val titleColumn = cursor.getColumnIndexOrThrow(
                 MediaStore.Audio.Media.TITLE
             )
-            val artistCol = cursor.getColumnIndexOrThrow(
+            val artistColumn = cursor.getColumnIndexOrThrow(
                 MediaStore.Audio.Media.ARTIST
             )
 
             while (cursor.moveToNext()) {
-                val id = cursor.getLong(idCol)
+                val id = cursor.getLong(idColumn)
                 val uri = ContentUris.withAppendedId(collection, id)
-                val title = cursor.getString(titleCol) ?: "Unknown song"
-                val artist = cursor.getString(artistCol)
-                    ?.takeUnless { it == "<unknown>" }
-                    ?: "Unknown artist"
-
+                val title = cursor.getString(titleColumn) ?: "Unknown song"
+                val artist = cursor.getString(artistColumn)
+                    ?.takeUnless { it == "<unknown>" } ?: "Unknown artist"
                 result.add(Song(uri, title, artist))
             }
         }
@@ -172,7 +163,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-    var status by remember { mutableStateOf("Preparing library…") }
+    var status by remember { mutableStateOf("Checking music access…") }
     var tab by remember { mutableIntStateOf(0) }
     var search by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf("Name") }
@@ -181,34 +172,28 @@ fun SoundwaveScreen(player: ExoPlayer) {
     var showCreate by remember { mutableStateOf(false) }
     var playlistName by remember { mutableStateOf("") }
     var songToAdd by remember { mutableStateOf<Song?>(null) }
+    var selectedArtist by remember { mutableStateOf<String?>(null) }
+    var refreshCounter by remember { mutableIntStateOf(0) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         permissionGranted = granted
-        if (!granted) {
-            status = "Music access denied. Allow it in app settings."
-        }
+        if (!granted) status = "Music access denied. Allow access in Settings."
     }
 
     LaunchedEffect(Unit) {
         if (!permissionGranted) {
-            permissionLauncher.launch(
-                Manifest.permission.READ_EXTERNAL_STORAGE
-            )
+            permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }
 
-    LaunchedEffect(permissionGranted) {
+    LaunchedEffect(permissionGranted, refreshCounter) {
         if (permissionGranted) {
             status = "Scanning your music…"
             try {
                 songs = scanMusic(context)
-                status = if (songs.isEmpty()) {
-                    "No audio found. Try refreshing after adding music."
-                } else {
-                    "${songs.size} songs in your library"
-                }
+                status = "${songs.size} songs in your library"
             } catch (_: Exception) {
                 status = "Could not scan music. Check app permissions."
             }
@@ -218,7 +203,6 @@ fun SoundwaveScreen(player: ExoPlayer) {
     LaunchedEffect(favorites) {
         saveFavorites(context, favorites)
     }
-
     LaunchedEffect(playlists) {
         savePlaylists(context, playlists)
     }
@@ -240,15 +224,15 @@ fun SoundwaveScreen(player: ExoPlayer) {
         player.play()
     }
 
-    val artists = songs.map { it.artist }.distinct().sorted()
+    val artists = songs.map { it.artist }.distinct()
+        .filter { it.contains(search, true) }.sorted()
 
     val visibleSongs = when (tab) {
         1 -> songs.filter { it.uri.toString() in favorites }
-        3 -> songs.filter { it.artist.contains(search, true) }
-        else -> songs.filter {
-            it.title.contains(search, true) ||
-                it.artist.contains(search, true)
-        }
+        3 -> songs.filter { it.artist == selectedArtist }
+        else -> songs
+    }.filter {
+        it.title.contains(search, true) || it.artist.contains(search, true)
     }.let { list ->
         when (sort) {
             "Artist" -> list.sortedBy { it.artist.lowercase() }
@@ -285,11 +269,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                     },
                     actions = {
                         IconButton(onClick = { showSettings = true }) {
-                            Icon(
-                                Icons.Default.Settings,
-                                contentDescription = "Settings",
-                                tint = WHITE
-                            )
+                            Icon(Icons.Default.Settings, "Settings", tint = WHITE)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -302,24 +282,22 @@ fun SoundwaveScreen(player: ExoPlayer) {
                     current?.let { song ->
                         Column(
                             Modifier.fillMaxWidth()
-                                .background(Color(0xFF242020))
+                                .background(Color(0xFF241818))
                                 .clickable { player.play() }
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .padding(horizontal = 12.dp, vertical = 7.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     Modifier.size(42.dp)
                                         .background(
-                                            Color(0xFF391414),
+                                            Color(0xFF401515),
                                             RoundedCornerShape(10.dp)
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         Icons.Default.MusicNote,
-                                        contentDescription = null,
+                                        null,
                                         tint = RED
                                     )
                                 }
@@ -331,46 +309,24 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1
                                     )
-                                    Text(
-                                        song.artist,
-                                        color = GREY,
-                                        fontSize = 12.sp,
-                                        maxLines = 1
-                                    )
+                                    Text(song.artist, color = GREY, fontSize = 12.sp)
                                 }
                                 IconButton(onClick = {
-                                    if (playing) player.pause()
-                                    else player.play()
+                                    if (playing) player.pause() else player.play()
                                 }) {
                                     AnimatedContent(
                                         targetState = playing,
-                                        label = "play-pause"
+                                        label = "play pause"
                                     ) { isPlaying ->
                                         Icon(
                                             if (isPlaying) Icons.Default.Pause
                                             else Icons.Default.PlayArrow,
-                                            contentDescription = "Play or pause",
+                                            "Play or pause",
                                             tint = RED
                                         )
                                     }
                                 }
                             }
-                            val progress by remember {
-                                derivedStateOf {
-                                    if (player.duration > 0)
-                                        player.currentPosition.toFloat() /
-                                            player.duration
-                                    else 0f
-                                }
-                            }
-                            LinearProgressIndicator(
-                                progress = { progress.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
-                                    .padding(top = 6.dp)
-                                    .height(2.dp),
-                                color = RED,
-                                trackColor = Color(0xFF494040)
-                            )
                         }
                     }
 
@@ -381,20 +337,19 @@ fun SoundwaveScreen(player: ExoPlayer) {
                         val icons = listOf(
                             Icons.Default.MusicNote,
                             Icons.Default.Favorite,
-                            Icons.Default.List,
+                            Icons.Default.QueueMusic,
                             Icons.Default.Person
                         )
-
                         labels.forEachIndexed { index, label ->
                             NavigationBarItem(
                                 selected = tab == index,
-                                onClick = { tab = index },
-                                icon = {
-                                    Icon(icons[index], contentDescription = label)
+                                onClick = {
+                                    tab = index
+                                    search = ""
+                                    selectedArtist = null
                                 },
-                                label = {
-                                    Text(label, fontSize = 9.sp, maxLines = 1)
-                                },
+                                icon = { Icon(icons[index], label) },
+                                label = { Text(label, fontSize = 9.sp, maxLines = 1) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = RED,
                                     selectedTextColor = RED,
@@ -409,9 +364,8 @@ fun SoundwaveScreen(player: ExoPlayer) {
             }
         ) { padding ->
             Column(
-                Modifier.fillMaxSize()
-                    .padding(padding)
-                    .padding(horizontal = 14.dp)
+                Modifier.fillMaxSize().padding(padding)
+                    .padding(horizontal = 12.dp)
             ) {
                 Spacer(Modifier.height(8.dp))
 
@@ -422,10 +376,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                     singleLine = true,
                     placeholder = { Text("Search your music") },
                     leadingIcon = {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = null
-                        )
+                        Icon(Icons.Default.Search, null, tint = GREY)
                     },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = WHITE,
@@ -437,27 +388,29 @@ fun SoundwaveScreen(player: ExoPlayer) {
                     )
                 )
 
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        listOf(
-                            "Your music", "Your favourites",
-                            "Your playlists", "Artists"
-                        )[tab],
+                        when (tab) {
+                            1 -> "Your favourites"
+                            2 -> "Your playlists"
+                            3 -> selectedArtist ?: "Artists"
+                            else -> "Your music"
+                        },
                         color = WHITE,
-                        fontSize = 20.sp,
+                        fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f)
                     )
 
-                    if (tab == 0 || tab == 3) {
+                    if (tab == 0 || tab == 3 && selectedArtist != null) {
                         Box {
                             TextButton(onClick = { sortMenu = true }) {
                                 Text(sort, color = RED, fontSize = 12.sp)
                                 Icon(
                                     Icons.Default.ArrowDropDown,
-                                    contentDescription = "Sort",
+                                    null,
                                     tint = RED
                                 )
                             }
@@ -483,34 +436,22 @@ fun SoundwaveScreen(player: ExoPlayer) {
                             playlistName = ""
                             showCreate = true
                         }) {
-                            Icon(
-                                Icons.Default.Add,
-                                contentDescription = "Create playlist",
-                                tint = RED
-                            )
+                            Icon(Icons.Default.Add, "Create playlist", tint = RED)
                         }
                     }
 
                     IconButton(onClick = {
-                        if (permissionGranted) {
-                            status = "Rescanning…"
-                        } else {
-                            permissionLauncher.launch(
-                                Manifest.permission.READ_EXTERNAL_STORAGE
-                            )
-                        }
-                    }) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Refresh library",
-                            tint = RED
+                        if (permissionGranted) refreshCounter++
+                        else permissionLauncher.launch(
+                            Manifest.permission.READ_EXTERNAL_STORAGE
                         )
+                    }) {
+                        Icon(Icons.Default.Refresh, "Refresh library", tint = RED)
                     }
                 }
 
                 Text(status, color = GREY, fontSize = 11.sp)
-
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(5.dp))
 
                 when {
                     !permissionGranted -> {
@@ -520,17 +461,13 @@ fun SoundwaveScreen(player: ExoPlayer) {
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
-                                    Icons.Default.MusicNote,
-                                    contentDescription = null,
+                                    Icons.Default.LibraryMusic,
+                                    null,
                                     tint = RED,
-                                    modifier = Modifier.size(56.dp)
+                                    modifier = Modifier.size(54.dp)
                                 )
-                                Text(
-                                    "Let Soundwave access your music",
-                                    color = WHITE,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(8.dp))
+                                Text("Allow Soundwave to access your music",
+                                    color = WHITE)
                                 Button(
                                     onClick = {
                                         permissionLauncher.launch(
@@ -541,7 +478,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                         containerColor = RED
                                     )
                                 ) {
-                                    Text("Grant music access")
+                                    Text("Grant permission")
                                 }
                             }
                         }
@@ -563,61 +500,49 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 items(playlists.keys.toList()) { name ->
-                                    val playlistSongs = playlists[name].orEmpty()
-                                        .mapNotNull { uri ->
-                                            songs.find {
-                                                it.uri.toString() == uri
-                                            }
-                                        }
-
                                     Column(
                                         Modifier.fillMaxWidth()
-                                            .background(
-                                                CARD,
-                                                RoundedCornerShape(14.dp)
-                                            )
+                                            .background(CARD, RoundedCornerShape(13.dp))
                                             .animateContentSize()
                                             .padding(12.dp)
                                     ) {
+                                        Text(name, color = WHITE,
+                                            fontWeight = FontWeight.Bold)
                                         Text(
-                                            name,
-                                            color = WHITE,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            "${playlists[name]?.size ?: 0} saved tracks",
+                                            "${playlists[name]?.size ?: 0} saved songs",
                                             color = GREY,
                                             fontSize = 12.sp
                                         )
-
-                                        playlistSongs.forEach { song ->
+                                        playlists[name].orEmpty().forEach { uri ->
+                                            val song = songs.find {
+                                                it.uri.toString() == uri
+                                            }
                                             Row(
                                                 Modifier.fillMaxWidth()
-                                                    .clickable {
-                                                        playSong(song)
-                                                    }
-                                                    .padding(vertical = 8.dp),
+                                                    .padding(top = 8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
-                                                    song.title,
+                                                    song?.title ?: "Unavailable song",
                                                     color = WHITE,
                                                     modifier = Modifier.weight(1f),
                                                     maxLines = 1
                                                 )
+                                                if (song != null) {
+                                                    IconButton(onClick = {
+                                                        playSong(song)
+                                                    }) {
+                                                        Icon(Icons.Default.PlayArrow,
+                                                            "Play", tint = RED)
+                                                    }
+                                                }
                                                 IconButton(onClick = {
                                                     playlists = playlists +
                                                         (name to playlists[name]
-                                                            .orEmpty()
-                                                            .filterNot {
-                                                                it == song.uri.toString()
-                                                            })
+                                                            .orEmpty().filterNot { it == uri })
                                                 }) {
-                                                    Icon(
-                                                        Icons.Default.Close,
-                                                        contentDescription = "Remove from playlist",
-                                                        tint = GREY
-                                                    )
+                                                    Icon(Icons.Default.Close,
+                                                        "Remove song", tint = GREY)
                                                 }
                                             }
                                         }
@@ -627,31 +552,35 @@ fun SoundwaveScreen(player: ExoPlayer) {
                         }
                     }
 
-                    tab == 3 && search.isBlank() -> {
+                    tab == 3 && selectedArtist == null -> {
                         LazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                            verticalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
-                            items(artists.filter {
-                                it.contains(search, true)
-                            }) { artist ->
+                            items(artists) { artist ->
                                 Row(
                                     Modifier.fillMaxWidth()
-                                        .background(
-                                            CARD,
-                                            RoundedCornerShape(12.dp)
-                                        )
-                                        .clickable { search = artist }
+                                        .background(CARD, RoundedCornerShape(13.dp))
+                                        .clickable {
+                                            selectedArtist = artist
+                                            search = ""
+                                        }
                                         .padding(14.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Default.Person,
-                                        contentDescription = null,
-                                        tint = RED
-                                    )
+                                    Box(
+                                        Modifier.size(42.dp)
+                                            .background(
+                                                Color(0xFF351515),
+                                                RoundedCornerShape(50)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.Person, null, tint = RED)
+                                    }
                                     Spacer(Modifier.width(12.dp))
                                     Column {
-                                        Text(artist, color = WHITE)
+                                        Text(artist, color = WHITE,
+                                            fontWeight = FontWeight.Medium)
                                         Text(
                                             "${songs.count { it.artist == artist }} songs",
                                             color = GREY,
@@ -671,18 +600,18 @@ fun SoundwaveScreen(player: ExoPlayer) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
                                     Icons.Default.MusicNote,
-                                    contentDescription = null,
+                                    null,
                                     tint = RED,
-                                    modifier = Modifier.size(54.dp)
+                                    modifier = Modifier.size(52.dp)
                                 )
                                 Text(
                                     if (tab == 1) "No favourites yet"
-                                    else "Your music will appear here",
+                                    else "No songs found",
                                     color = WHITE,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    "Songs are scanned from your device",
+                                    "Music is scanned from your device",
                                     color = GREY,
                                     fontSize = 12.sp
                                 )
@@ -694,95 +623,59 @@ fun SoundwaveScreen(player: ExoPlayer) {
                         LazyColumn(
                             verticalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
-                            items(
-                                visibleSongs,
-                                key = { it.uri.toString() }
-                            ) { song ->
+                            items(visibleSongs, key = { it.uri.toString() }) { song ->
                                 Row(
                                     Modifier.fillMaxWidth()
-                                        .background(
-                                            CARD,
-                                            RoundedCornerShape(13.dp)
-                                        )
+                                        .background(CARD, RoundedCornerShape(13.dp))
                                         .clickable { playSong(song) }
-                                        .padding(9.dp)
-                                        .animateContentSize(),
+                                        .animateContentSize()
+                                        .padding(8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(
-                                        Modifier.size(46.dp)
+                                        Modifier.size(45.dp)
                                             .background(
                                                 Color(0xFF351515),
                                                 RoundedCornerShape(10.dp)
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(
-                                            Icons.Default.MusicNote,
-                                            contentDescription = null,
-                                            tint = RED,
-                                            modifier = Modifier.size(26.dp)
-                                        )
+                                        Icon(Icons.Default.MusicNote, null,
+                                            tint = RED, modifier = Modifier.size(25.dp))
                                     }
-
-                                    Spacer(Modifier.width(10.dp))
-
+                                    Spacer(Modifier.width(9.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text(
-                                            song.title,
-                                            color = WHITE,
+                                        Text(song.title, color = WHITE,
                                             fontWeight = FontWeight.Medium,
-                                            maxLines = 1
-                                        )
+                                            maxLines = 1)
                                         Spacer(Modifier.height(3.dp))
-                                        Text(
-                                            song.artist,
-                                            color = GREY,
-                                            fontSize = 11.sp,
-                                            maxLines = 1
-                                        )
+                                        Text(song.artist, color = GREY,
+                                            fontSize = 11.sp, maxLines = 1)
                                     }
-
                                     IconButton(onClick = {
                                         val uri = song.uri.toString()
-                                        favorites = if (uri in favorites) {
-                                            favorites - uri
-                                        } else {
-                                            favorites + uri
-                                        }
+                                        favorites = if (uri in favorites)
+                                            favorites - uri else favorites + uri
                                     }) {
                                         AnimatedContent(
-                                            targetState =
-                                                song.uri.toString() in favorites,
-                                            label = "favourite"
-                                        ) { isFavorite ->
+                                            targetState = song.uri.toString() in favorites,
+                                            label = "favorite"
+                                        ) { favorite ->
                                             Icon(
-                                                if (isFavorite)
-                                                    Icons.Default.Favorite
-                                                else
-                                                    Icons.Default.FavoriteBorder,
-                                                contentDescription = "Toggle favourite",
+                                                if (favorite) Icons.Default.Favorite
+                                                else Icons.Default.FavoriteBorder,
+                                                "Toggle favourite",
                                                 tint = RED
                                             )
                                         }
                                     }
-
-                                    IconButton(onClick = {
-                                        songToAdd = song
-                                    }) {
-                                        Icon(
-                                            Icons.Default.Add,
-                                            contentDescription = "Add to playlist",
-                                            tint = GREY
-                                        )
+                                    IconButton(onClick = { songToAdd = song }) {
+                                        Icon(Icons.Default.Add, "Add to playlist",
+                                            tint = GREY)
                                     }
-
                                     IconButton(onClick = { playSong(song) }) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = "Play",
-                                            tint = WHITE
-                                        )
+                                        Icon(Icons.Default.PlayArrow, "Play",
+                                            tint = WHITE)
                                     }
                                 }
                             }
@@ -795,13 +688,13 @@ fun SoundwaveScreen(player: ExoPlayer) {
         if (showCreate) {
             AlertDialog(
                 onDismissRequest = { showCreate = false },
-                title = { Text("New playlist") },
+                title = { Text("Create playlist") },
                 text = {
                     OutlinedTextField(
                         value = playlistName,
                         onValueChange = { playlistName = it },
-                        singleLine = true,
-                        label = { Text("Playlist name") }
+                        label = { Text("Playlist name") },
+                        singleLine = true
                     )
                 },
                 confirmButton = {
@@ -829,7 +722,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                 title = { Text("Add to playlist") },
                 text = {
                     if (playlists.isEmpty()) {
-                        Text("Create a playlist first in the Playlists tab.")
+                        Text("Create a playlist first.")
                     } else {
                         Column {
                             playlists.keys.forEach { name ->
@@ -865,17 +758,16 @@ fun SoundwaveScreen(player: ExoPlayer) {
                 onDismissRequest = { showSettings = false },
                 title = { Text("Soundwave Settings") },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Theme: Black & Red")
                         Text("Library: Automatic device scan")
                         Text("Favourites and playlists: Saved locally")
-                        Text("Music found: ${songs.size}")
+                        Text("Songs found: ${songs.size}")
+                        Text("Sort order: $sort")
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showSettings = false
-                    }) {
+                    TextButton(onClick = { showSettings = false }) {
                         Text("Done", color = RED)
                     }
                 }
