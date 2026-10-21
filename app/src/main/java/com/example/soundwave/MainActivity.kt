@@ -1,5 +1,10 @@
 
 package com.example.soundwave
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
+import android.media.MediaMetadataRetriever
+import android.graphics.BitmapFactory
 
 import android.Manifest
 import android.content.ContentUris
@@ -583,11 +588,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        "♫",
-                                        color = RED,
-                                        fontSize = 25.sp
-                                    )
+                                    SongArtwork(song, Modifier.size(43.dp), 10.dp)
                                 }
 
                                 Spacer(Modifier.width(10.dp))
@@ -1084,6 +1085,52 @@ fun SoundwaveScreen(player: ExoPlayer) {
     }
 }
 
+
+@Composable
+private fun SongArtwork(
+    song: Song,
+    modifier: Modifier = Modifier,
+    cornerRadius: androidx.compose.ui.unit.Dp = 10.dp
+) {
+    val context = LocalContext.current
+    val artwork by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        initialValue = null,
+        key1 = song.uri
+    ) {
+        value = withContext(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, song.uri)
+                retriever.embeddedPicture?.let { bytes ->
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                }
+            } catch (_: Exception) {
+                null
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(Color(0xFF351515)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (artwork != null) {
+            Image(
+                bitmap = artwork!!,
+                contentDescription = "Album artwork for ${song.title}",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text("♫", color = RED, fontSize = 25.sp)
+        }
+    }
+}
+
 @Composable
 private fun SongRow(
     song: Song,
@@ -1113,7 +1160,7 @@ private fun SongRow(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Text("♫", color = RED, fontSize = 25.sp)
+            SongArtwork(song, Modifier.size(43.dp), 10.dp)
         }
 
         Spacer(Modifier.width(10.dp))
@@ -1375,12 +1422,7 @@ private fun FullPlayerScreen(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        "♫",
-                        color = RED,
-                        fontSize = 145.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    current?.let { SongArtwork(it, Modifier.fillMaxSize(), 28.dp) }
                 }
 
                 Spacer(Modifier.height(28.dp))
