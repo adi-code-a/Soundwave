@@ -1,4 +1,4 @@
-
+ 
 package com.example.soundwave
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
