@@ -958,152 +958,215 @@ fun SoundwaveScreen(player: ExoPlayer) {
 
                             if (visibleSongs.isEmpty()) {
                                 EmptyMessage(
-                                    if (songs.isEmpty()) status
-                                    else "No songs found here."
+                                    if (songs.isEmpty()) status else "No songs found here."
                                 )
                             } else {
                                 Box(Modifier.fillMaxSize()) {
-                        LazyColumn(state = songListState, modifier = Modifier.fillMaxSize().padding(end = if (sort == "Name" && search.isBlank() && tab == 0) 18.dp else 0.dp)) {
-                                    items(
-                                        items = visibleSongs,
-                                        key = { it.uri.toString() }
-                                    ) { song ->
-                                        SongRow(
-                                            song = song,
-                                            isFavorite =
-                                                song.uri.toString() in favorites,
-                                            onPlay = {
-                                                playSong(song, visibleSongs)
-                                            },
-                                            onToggleFavorite = {
-                                                toggleFavorite(song)
-                                            },
-                                            onAddToPlaylist = {
-                                                requestAddToPlaylist(song)
-                                            },
-                                            onPlayNext = {
-                                                  if (current == null || player.mediaItemCount == 0) {
-                                                      playSong(song, listOf(song))
-                                                  } else if (song.uri == player.currentMediaItem?.localConfiguration?.uri) {
-                                                      Toast.makeText(context, "This song is already playing", Toast.LENGTH_SHORT).show()
-                                                  } else {
-                                                      val existingIndex = (0 until player.mediaItemCount).firstOrNull { i ->
-                                                          player.getMediaItemAt(i).localConfiguration?.uri == song.uri
-                                                      }
-                                                      if (existingIndex != null) {
-                                                          player.removeMediaItem(existingIndex)
-                                                      }
-                                                      val nextIndex = (player.currentMediaItemIndex + 1).coerceIn(0, player.mediaItemCount)
-                                                      player.addMediaItem(nextIndex, MediaItem.fromUri(song.uri))
-                                                      playQueue = (0 until player.mediaItemCount).mapNotNull { i ->
-                                                          val uri = player.getMediaItemAt(i).localConfiguration?.uri
-                                                          songs.firstOrNull { it.uri == uri }
-                                                      }
-                                                      Toast.makeText(context, "Added to Up Next", Toast.LENGTH_SHORT).show()
-                                                  }
-                                              }
-                                        )
+                                    LazyColumn(
+                                        state = songListState,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(
+                                                end = if (
+                                                    sort == "Name" &&
+                                                    search.isBlank() &&
+                                                    tab == 0
+                                                ) 18.dp else 0.dp
+                                            )
+                                    ) {
+                                        items(
+                                            items = visibleSongs,
+                                            key = { it.uri.toString() }
+                                        ) { song ->
+                                            SongRow(
+                                                song = song,
+                                                isFavorite = song.uri.toString() in favorites,
+                                                onPlay = { playSong(song, visibleSongs) },
+                                                onToggleFavorite = { toggleFavorite(song) },
+                                                onAddToPlaylist = { requestAddToPlaylist(song) },
+                                                onPlayNext = {
+                                                    if (current == null || player.mediaItemCount == 0) {
+                                                        playSong(song, listOf(song))
+                                                    } else if (
+                                                        song.uri == player.currentMediaItem
+                                                            ?.localConfiguration?.uri
+                                                    ) {
+                                                        Toast.makeText(
+                                                            context,
+                                                            "This song is already playing",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } else {
+                                                        val existingIndex =
+                                                            (0 until player.mediaItemCount)
+                                                                .firstOrNull { i ->
+                                                                    player.getMediaItemAt(i)
+                                                                        .localConfiguration?.uri == song.uri
+                                                                }
+
+                                                        if (existingIndex != null) {
+                                                            player.removeMediaItem(existingIndex)
+                                                        }
+
+                                                        val nextIndex =
+                                                            (player.currentMediaItemIndex + 1)
+                                                                .coerceIn(0, player.mediaItemCount)
+
+                                                        player.addMediaItem(
+                                                            nextIndex,
+                                                            MediaItem.fromUri(song.uri)
+                                                        )
+
+                                                        playQueue =
+                                                            (0 until player.mediaItemCount)
+                                                                .mapNotNull { i ->
+                                                                    val uri = player
+                                                                        .getMediaItemAt(i)
+                                                                        .localConfiguration?.uri
+                                                                    songs.firstOrNull { it.uri == uri }
+                                                                }
+
+                                                        Toast.makeText(
+                                                            context,
+                                                            "Added to Up Next",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+
+                                    if (
+                                        sort == "Name" &&
+                                        search.isBlank() &&
+                                        tab == 0 &&
+                                        visibleSongs.isNotEmpty()
+                                    ) {
+                                        val alphabet = ('A'..'Z').map { it.toString() } + "#"
+                                        var railHeight by remember {
+                                            mutableFloatStateOf(1f)
+                                        }
+
+                                        fun scrollToLetter(letter: String) {
+                                            val exactTarget = visibleSongs.indexOfFirst {
+                                                val first = it.title.trim()
+                                                    .firstOrNull()?.uppercaseChar()
+                                                if (letter == "#") {
+                                                    first == null || !first.isLetter()
+                                                } else {
+                                                    first?.toString() == letter
+                                                }
+                                            }
+
+                                            val target = if (exactTarget >= 0) {
+                                                exactTarget
+                                            } else {
+                                                val wanted = if (letter == "#") {
+                                                    Int.MAX_VALUE
+                                                } else {
+                                                    letter[0].code
+                                                }
+
+                                                visibleSongs.indexOfFirst {
+                                                    val first = it.title.trim()
+                                                        .firstOrNull()?.uppercaseChar()
+                                                    if (letter == "#") {
+                                                        first == null || first.isLetter().not()
+                                                    } else {
+                                                        first != null &&
+                                                            first.isLetter() &&
+                                                            first.code >= wanted
+                                                    }
+                                                }.takeIf { it >= 0 } ?: visibleSongs.lastIndex
+                                            }
+
+                                            if (target >= 0) {
+                                                fastScrollScope.launch {
+                                                    songListState.scrollToItem(target)
+                                                }
+                                            }
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.CenterEnd)
+                                                .fillMaxHeight()
+                                                .width(18.dp)
+                                                .padding(vertical = 8.dp)
+                                                .onSizeChanged {
+                                                    railHeight = it.height
+                                                        .toFloat().coerceAtLeast(1f)
+                                                }
+                                                .pointerInput(visibleSongs, railHeight) {
+                                                    detectVerticalDragGestures(
+                                                        onDragStart = { offset ->
+                                                            val index =
+                                                                ((offset.y / railHeight) *
+                                                                    alphabet.size)
+                                                                    .toInt()
+                                                                    .coerceIn(0, alphabet.lastIndex)
+                                                            val letter = alphabet[index]
+                                                            fastScrollLetter = letter
+                                                            scrollToLetter(letter)
+                                                        },
+                                                        onVerticalDrag = { change, _ ->
+                                                            val index =
+                                                                ((change.position.y / railHeight) *
+                                                                    alphabet.size)
+                                                                    .toInt()
+                                                                    .coerceIn(0, alphabet.lastIndex)
+                                                            val letter = alphabet[index]
+                                                            fastScrollLetter = letter
+                                                            change.consume()
+                                                            scrollToLetter(letter)
+                                                        },
+                                                        onDragEnd = {
+                                                            fastScrollLetter = null
+                                                        },
+                                                        onDragCancel = {
+                                                            fastScrollLetter = null
+                                                        }
+                                                    )
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.fillMaxHeight(),
+                                                verticalArrangement = Arrangement.SpaceEvenly,
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                alphabet.forEach { letter ->
+                                                    Text(
+                                                        text = letter,
+                                                        color = if (fastScrollLetter == letter) RED else GREY,
+                                                        fontSize = 8.sp,
+                                                        lineHeight = 9.sp
+                                                    )
+                                                }
+                                            }
+
+                                            fastScrollLetter?.let { letter ->
+                                                Text(
+                                                    text = letter,
+                                                    color = WHITE,
+                                                    fontSize = 26.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier
+                                                        .align(Alignment.CenterStart)
+                                                        .offset(x = (-54).dp)
+                                                        .background(RED, RoundedCornerShape(12.dp))
+                                                        .padding(
+                                                            horizontal = 16.dp,
+                                                            vertical = 10.dp
+                                                        )
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    if (sort == "Name" && search.isBlank() && tab == 0 && visibleSongs.isNotEmpty()) {
-                        val alphabet = ('A'..'Z').map { it.toString() } + "#"
-                        var railHeight by remember { mutableFloatStateOf(1f) }
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .fillMaxHeight()
-                                .width(18.dp)
-                                .padding(vertical = 8.dp)
-                                .onSizeChanged { railHeight = it.height.toFloat().coerceAtLeast(1f) }
-                                .pointerInput(visibleSongs, railHeight) {
-                                    detectVerticalDragGestures(
-                                        onDragStart = { offset ->
-                                            val index = ((offset.y / railHeight) * alphabet.size).toInt().coerceIn(0, alphabet.lastIndex)
-                                            val letter = alphabet[index]
-                                            fastScrollLetter = letter
-                                            val exactTarget = visibleSongs.indexOfFirst {
-                                                val first = it.title.trim().firstOrNull()?.uppercaseChar()
-                                                if (letter == "#") first == null || !first.isLetter() else first?.toString() == letter
-                                            }
-                                            val target = if (exactTarget >= 0) exactTarget else {
-                                                val wanted = if (letter == "#") Int.MAX_VALUE else letter[0].code
-                                                visibleSongs.indexOfFirst {
-                                                    val first = it.title.trim().firstOrNull()?.uppercaseChar()
-                                                    if (letter == "#") first == null || first?.isLetter() == false
-                                                    else first != null && first.isLetter() && first.code >= wanted
-                                                }.takeIf { it >= 0 } ?: visibleSongs.lastIndex
-                                            }
-                                            if (target >= 0) {
-                                                fastScrollScope.launch {
-                                                    songListState.scrollToItem(target)
-                                                }
-                                            }
-                                        },
-                                        onVerticalDrag = { change, _ ->
-                                            val index = ((change.position.y / railHeight) * alphabet.size).toInt().coerceIn(0, alphabet.lastIndex)
-                                            val letter = alphabet[index]
-                                            fastScrollLetter = letter
-                                            val exactTarget = visibleSongs.indexOfFirst {
-                                                val first = it.title.trim().firstOrNull()?.uppercaseChar()
-                                                if (letter == "#") first == null || !first.isLetter() else first?.toString() == letter
-                                            }
-                                            val target = if (exactTarget >= 0) exactTarget else {
-                                                val wanted = if (letter == "#") Int.MAX_VALUE else letter[0].code
-                                                visibleSongs.indexOfFirst {
-                                                    val first = it.title.trim().firstOrNull()?.uppercaseChar()
-                                                    if (letter == "#") first == null || first?.isLetter() == false
-                                                    else first != null && first.isLetter() && first.code >= wanted
-                                                }.takeIf { it >= 0 } ?: visibleSongs.lastIndex
-                                            }
-                                            if (target >= 0) {
-                                                change.consume()
-                                                fastScrollScope.launch {
-                                                    songListState.scrollToItem(target)
-                                                }
-                                            }
-                                        },
-                                        onDragEnd = { fastScrollLetter = null },
-                                        onDragCancel = { fastScrollLetter = null }
-                                    )
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxHeight(),
-                                verticalArrangement = Arrangement.SpaceEvenly,
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                alphabet.forEach { letter ->
-                                    Text(
-                                        text = letter,
-                                        color = if (fastScrollLetter == letter) RED else GREY,
-                                        fontSize = 8.sp,
-                                        lineHeight = 9.sp
-                                    )
-                                }
-                            }
-                            fastScrollLetter?.let { letter ->
-                                Text(
-                                    text = letter,
-                                    color = WHITE,
-                                    fontSize = 26.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier
-                                        .align(Alignment.CenterStart)
-                                        .offset(x = (-54).dp)
-                                        .background(RED, RoundedCornerShape(12.dp))
-                                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                                )
-                            }
-                        }
-                    }
-                    }
-                }
-            }
-        }
-
         if (showCreate) {
             AlertDialog(
                 onDismissRequest = { showCreate = false },
@@ -1216,8 +1279,6 @@ fun SoundwaveScreen(player: ExoPlayer) {
         }
     }
 }
-
-
 @Composable
 private fun SongArtwork(
     song: Song,
