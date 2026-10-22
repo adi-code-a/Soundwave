@@ -1265,6 +1265,7 @@ private fun FullPlayerScreen(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(false) }
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var dragging by remember { mutableStateOf(false) }
@@ -1280,7 +1281,6 @@ private fun FullPlayerScreen(
             duration = player.duration.takeIf {
                 it > 0L && it != androidx.media3.common.C.TIME_UNSET
             } ?: (current?.duration ?: 0L)
-
             delay(400)
         }
     }
@@ -1296,45 +1296,66 @@ private fun FullPlayerScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF301010), BG, BG)
+                    listOf(Color(0xFF351010), BG, BG)
                 )
             )
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = 22.dp)
     ) {
+        // Top bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp),
+                .padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextButton(onClick = onBack) {
                 Text("⌄", color = WHITE, fontSize = 30.sp)
             }
 
-            Column(
-                modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Spacer(Modifier.weight(1f))
+
+            Row(
+                modifier = Modifier
+                    .background(CARD, RoundedCornerShape(24.dp))
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "NOW PLAYING",
-                    color = GREY,
-                    fontSize = 10.sp,
-                    letterSpacing = 2.sp
-                )
-                Text(
-                    "SOUNDWAVE",
-                    color = RED,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    letterSpacing = 2.sp
-                )
+                TextButton(
+                    onClick = { showLyrics = false },
+                    modifier = Modifier.background(
+                        if (!showLyrics) RED else Color.Transparent,
+                        RoundedCornerShape(20.dp)
+                    )
+                ) {
+                    Text(
+                        "Cover",
+                        color = WHITE,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                TextButton(
+                    onClick = { showLyrics = true },
+                    modifier = Modifier.background(
+                        if (showLyrics) RED else Color.Transparent,
+                        RoundedCornerShape(20.dp)
+                    )
+                ) {
+                    Text(
+                        "Lyrics",
+                        color = WHITE,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
+
+            Spacer(Modifier.weight(1f))
 
             Box {
                 TextButton(onClick = { menuExpanded = true }) {
-                    Text("⋮", color = WHITE, fontSize = 30.sp)
+                    Text("⋮", color = WHITE, fontSize = 28.sp)
                 }
 
                 DropdownMenu(
@@ -1356,9 +1377,7 @@ private fun FullPlayerScreen(
                         }
                     )
                     DropdownMenuItem(
-                        text = {
-                            Text("Add to playlist", color = WHITE)
-                        },
+                        text = { Text("Add to playlist", color = WHITE) },
                         onClick = {
                             menuExpanded = false
                             onAddToPlaylist()
@@ -1395,184 +1414,243 @@ private fun FullPlayerScreen(
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(14.dp))
 
+        // Artwork / lyrics area
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Box(
+            if (showLyrics) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    Color(0xFF511919),
-                                    Color(0xFF1A1010),
-                                    Color(0xFF331010)
-                                )
-                            ),
-                            RoundedCornerShape(28.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    current?.let { SongArtwork(it, Modifier.fillMaxSize(), 28.dp) }
-                }
-
-                Spacer(Modifier.height(28.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            current?.title ?: "Nothing playing",
-                            color = WHITE,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 23.sp,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            current?.artist ?: "Choose a song from your library",
-                            color = GREY,
-                            fontSize = 15.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    TextButton(onClick = onToggleFavorite) {
-                        Text(
-                            if (isFavorite) "♥" else "♡",
-                            color = RED,
-                            fontSize = 29.sp
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(18.dp))
-
-                val safeDuration = duration.coerceAtLeast(1L)
-                Slider(
-                    value = if (dragging) seekPosition
-                    else position.coerceIn(0L, safeDuration).toFloat(),
-                    onValueChange = {
-                        dragging = true
-                        seekPosition = it
-                    },
-                    onValueChangeFinished = {
-                        player.seekTo(seekPosition.toLong())
-                        position = seekPosition.toLong()
-                        dragging = false
-                    },
-                    valueRange = 0f..safeDuration.toFloat(),
-                    enabled = current != null,
-                    colors = SliderDefaults.colors(
-                        thumbColor = RED,
-                        activeTrackColor = RED,
-                        inactiveTrackColor = Color(0xFF555555)
-                    )
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .background(CARD, RoundedCornerShape(24.dp))
+                        .padding(28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        formatDuration(
-                            if (dragging) seekPosition.toLong() else position
-                        ),
-                        color = GREY,
-                        fontSize = 12.sp
+                        "LYRICS",
+                        color = RED,
+                        fontSize = 12.sp,
+                        letterSpacing = 3.sp,
+                        fontWeight = FontWeight.Bold
                     )
+                    Spacer(Modifier.height(20.dp))
                     Text(
-                        formatDuration(duration),
+                        current?.title ?: "Nothing playing",
+                        color = WHITE,
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Lyrics aren't available in this version yet.",
                         color = GREY,
-                        fontSize = 12.sp
+                        fontSize = 14.sp
                     )
                 }
-
-                Spacer(Modifier.height(18.dp))
-
-                Row(
+            } else {
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    TextButton(onClick = onToggleShuffle) {
-                        Text(
-                            if (shuffleEnabled) "🔀" else "⇄",
-                            color = if (shuffleEnabled) RED else GREY,
-                            fontSize = 23.sp
-                        )
-                    }
-
-                    TextButton(onClick = {
-                        player.seekToPreviousMediaItem()
-                    }) {
-                        Text("⏮", color = WHITE, fontSize = 31.sp)
-                    }
-
                     Box(
                         modifier = Modifier
-                            .size(72.dp)
-                            .background(RED, RoundedCornerShape(50)),
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        Color(0xFF511919),
+                                        Color(0xFF1A1010),
+                                        Color(0xFF331010)
+                                    )
+                                ),
+                                RoundedCornerShape(26.dp)
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
-                        TextButton(
-                            onClick = {
-                                if (playing) player.pause()
-                                else player.play()
-                            }
-                        ) {
-                            Text(
-                                if (playing) "Ⅱ" else "▶",
-                                color = WHITE,
-                                fontSize = 31.sp
+                        current?.let {
+                            SongArtwork(
+                                it,
+                                Modifier.fillMaxSize(),
+                                26.dp
                             )
                         }
                     }
-
-                    TextButton(onClick = {
-                        player.seekToNextMediaItem()
-                    }) {
-                        Text("⏭", color = WHITE, fontSize = 31.sp)
-                    }
-
-                    TextButton(onClick = onCycleRepeat) {
-                        Text(
-                            when (repeatMode) {
-                                Player.REPEAT_MODE_ONE -> "↻¹"
-                                Player.REPEAT_MODE_ALL -> "↻"
-                                else -> "↻"
-                            },
-                            color = if (repeatMode == Player.REPEAT_MODE_OFF)
-                                GREY else RED,
-                            fontSize = 23.sp
-                        )
-                    }
                 }
+            }
+        }
 
-                Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(22.dp))
 
+        // Song title, artist and favourite
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    "$repeatLabel   ·   ${if (shuffleEnabled) "Shuffle on" else "Shuffle off"}",
+                    current?.title ?: "Nothing playing",
+                    color = WHITE,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 23.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    current?.artist ?: "Choose a song from your library",
                     color = GREY,
-                    fontSize = 11.sp
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            TextButton(onClick = onToggleFavorite) {
+                Text(
+                    if (isFavorite) "♥" else "♡",
+                    color = RED,
+                    fontSize = 30.sp
                 )
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(12.dp))
+
+        // Seek bar and timestamps
+        val safeDuration = duration.coerceAtLeast(1L)
+
+        Slider(
+            value = if (dragging) seekPosition
+            else position.coerceIn(0L, safeDuration).toFloat(),
+            onValueChange = {
+                dragging = true
+                seekPosition = it
+            },
+            onValueChangeFinished = {
+                player.seekTo(seekPosition.toLong())
+                position = seekPosition.toLong()
+                dragging = false
+            },
+            valueRange = 0f..safeDuration.toFloat(),
+            enabled = current != null,
+            colors = SliderDefaults.colors(
+                thumbColor = RED,
+                activeTrackColor = RED,
+                inactiveTrackColor = Color(0xFF555555)
+            )
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                formatDuration(
+                    if (dragging) seekPosition.toLong() else position
+                ),
+                color = GREY,
+                fontSize = 12.sp
+            )
+            Text(
+                formatDuration(duration),
+                color = GREY,
+                fontSize = 12.sp
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Playback controls
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onToggleShuffle) {
+                Text(
+                    "⇄",
+                    color = if (shuffleEnabled) RED else GREY,
+                    fontSize = 22.sp
+                )
+            }
+
+            TextButton(onClick = {
+                player.seekToPreviousMediaItem()
+            }) {
+                Text("⏮", color = WHITE, fontSize = 27.sp)
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(70.dp)
+                    .background(
+                        Color.Transparent,
+                        RoundedCornerShape(50)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Color.Transparent,
+                            RoundedCornerShape(50)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    TextButton(
+                        onClick = {
+                            if (playing) player.pause() else player.play()
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                RED,
+                                RoundedCornerShape(50)
+                            )
+                    ) {
+                        Text(
+                            if (playing) "Ⅱ" else "▶",
+                            color = WHITE,
+                            fontSize = 28.sp
+                        )
+                    }
+                }
+            }
+
+            TextButton(onClick = {
+                player.seekToNextMediaItem()
+            }) {
+                Text("⏭", color = WHITE, fontSize = 27.sp)
+            }
+
+            TextButton(onClick = onCycleRepeat) {
+                Text(
+                    if (repeatMode == Player.REPEAT_MODE_ONE) "↻¹" else "↻",
+                    color = if (repeatMode == Player.REPEAT_MODE_OFF)
+                        GREY else RED,
+                    fontSize = 22.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            "$repeatLabel   ·   ${if (shuffleEnabled) "Shuffle on" else "Shuffle off"}",
+            modifier = Modifier.fillMaxWidth(),
+            color = GREY,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(10.dp))
     }
 
     if (showDetails && current != null) {
@@ -1602,3 +1680,4 @@ private fun FullPlayerScreen(
         )
     }
 }
+
