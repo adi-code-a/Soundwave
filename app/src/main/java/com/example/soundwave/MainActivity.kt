@@ -1,5 +1,10 @@
  
 package com.example.soundwave
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
@@ -30,14 +35,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -55,6 +66,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -210,27 +222,35 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var showSplash by remember { mutableStateOf(true) }
+            var splashPhase by remember { mutableIntStateOf(0) }
 
             LaunchedEffect(Unit) {
+                splashPhase = 1
                 delay(1800)
+                splashPhase = 2
+                delay(1200)
                 showSplash = false
             }
 
             if (showSplash) {
-                val transition = rememberInfiniteTransition(
-                    label = "soundwave_splash"
+                val creditAlpha by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (splashPhase == 1) 1f else 0f,
+                    animationSpec = tween(650, easing = FastOutSlowInEasing),
+                    label = "credit_alpha"
                 )
-
-                val logoScale by transition.animateFloat(
-                    initialValue = 0.88f,
-                    targetValue = 1.08f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(
-                            700,
-                            easing = FastOutSlowInEasing
-                        ),
-                        repeatMode = RepeatMode.Reverse
-                    ),
+                val creditScale by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (splashPhase == 1) 1f else 0.82f,
+                    animationSpec = tween(900, easing = FastOutSlowInEasing),
+                    label = "credit_scale"
+                )
+                val logoAlpha by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (splashPhase == 2) 1f else 0f,
+                    animationSpec = tween(650, easing = FastOutSlowInEasing),
+                    label = "logo_alpha"
+                )
+                val logoScale by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (splashPhase == 2) 1f else 0.72f,
+                    animationSpec = tween(700, easing = FastOutSlowInEasing),
                     label = "logo_scale"
                 )
 
@@ -240,7 +260,19 @@ class MainActivity : ComponentActivity() {
                         .background(BG),
                     contentAlignment = Alignment.Center
                 ) {
+                    Text(
+                        text = "A PROJECT BY ADITYA SHINDE",
+                        modifier = Modifier
+                            .scale(creditScale)
+                            .alpha(creditAlpha),
+                        color = RED,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp
+                    )
+
                     Column(
+                        modifier = Modifier.alpha(logoAlpha),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Image(
@@ -252,24 +284,13 @@ class MainActivity : ComponentActivity() {
                                 .size(120.dp)
                                 .scale(logoScale)
                         )
-
                         Spacer(Modifier.height(22.dp))
-
                         Text(
                             "SOUNDWAVE",
                             color = WHITE,
                             fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 4.sp
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Text(
-                            "YOUR MUSIC. YOUR WAY.",
-                            color = RED,
-                            fontSize = 10.sp,
-                            letterSpacing = 2.sp
                         )
                     }
                 }
@@ -306,6 +327,10 @@ fun SoundwaveScreen(player: ExoPlayer) {
     var playQueue by remember { mutableStateOf(emptyList<Song>()) }
     var playing by remember { mutableStateOf(false) }
     var fullPlayer by remember { mutableStateOf(false) }
+    var showUpNext by remember { mutableStateOf(false) }
+    val songListState = rememberLazyListState()
+    val fastScrollScope = rememberCoroutineScope()
+    var fastScrollLetter by remember { mutableStateOf<String?>(null) }
 
     var permissionGranted by remember {
         mutableStateOf(
@@ -373,7 +398,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
         savePlaylists(context, playlists)
     }
 
-    DisposableEffect(player, playQueue) {
+    DisposableEffect(player, songs) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
@@ -384,7 +409,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
                 reason: Int
             ) {
                 val uri = mediaItem?.localConfiguration?.uri ?: return
-                playQueue.firstOrNull { it.uri == uri }?.let {
+                songs.firstOrNull { it.uri == uri }?.let {
                     current = it
                 }
             }
@@ -511,9 +536,8 @@ fun SoundwaveScreen(player: ExoPlayer) {
                 else -> list.sortedBy { it.title.lowercase() }
             }
         }
-
-    BackHandler(enabled = fullPlayer) {
-        fullPlayer = false
+    BackHandler(enabled = fullPlayer || showUpNext) {
+        if (showUpNext) showUpNext = false else fullPlayer = false
     }
 
     MaterialTheme(
@@ -529,7 +553,7 @@ fun SoundwaveScreen(player: ExoPlayer) {
             containerColor = BG,
 
             topBar = {
-                if (!fullPlayer) {
+                if (!fullPlayer && !showUpNext) {
                     TopAppBar(
                         title = {
                             Column {
@@ -538,12 +562,6 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                     color = WHITE,
                                     fontSize = 25.sp,
                                     fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    "YOUR MUSIC. YOUR WAY.",
-                                    color = RED,
-                                    fontSize = 10.sp,
-                                    letterSpacing = 2.sp
                                 )
                             }
                         },
@@ -678,7 +696,30 @@ fun SoundwaveScreen(player: ExoPlayer) {
             }
         ) { innerPadding ->
 
-            if (fullPlayer) {
+            if (showUpNext) {
+                UpNextScreen(
+                    player = player,
+                    current = current,
+                    songs = songs,
+                    onBack = { showUpNext = false },
+                      onMakeNext = { song ->
+                          if (song.uri != player.currentMediaItem?.localConfiguration?.uri) {
+                              val existing = (0 until player.mediaItemCount).firstOrNull { i ->
+                                  player.getMediaItemAt(i).localConfiguration?.uri == song.uri
+                              }
+                              if (existing != null) player.removeMediaItem(existing)
+
+                              val next = (player.currentMediaItemIndex + 1).coerceIn(0, player.mediaItemCount)
+                              player.addMediaItem(next, MediaItem.fromUri(song.uri))
+
+                              playQueue = (0 until player.mediaItemCount).mapNotNull { i ->
+                                  val uri = player.getMediaItemAt(i).localConfiguration?.uri
+                                  songs.firstOrNull { it.uri == uri }
+                              }
+                          }
+                      }
+                )
+            } else if (fullPlayer) {
                 FullPlayerScreen(
                     player = player,
                     current = current,
@@ -694,21 +735,22 @@ fun SoundwaveScreen(player: ExoPlayer) {
                         current?.let { requestAddToPlaylist(it) }
                     },
                     onToggleShuffle = { toggleShuffle() },
-                    onCycleRepeat = { cycleRepeat() }
+                    onCycleRepeat = { cycleRepeat() },
+                    onOpenUpNext = { showUpNext = true }
                 )
             } else {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                 ) {
                     OutlinedTextField(
                         value = search,
                         onValueChange = { search = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().height(54.dp),
                         singleLine = true,
-                        label = { Text("Search music") },
+
                         placeholder = { Text("Song, artist or file type") },
                         shape = RoundedCornerShape(14.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -920,7 +962,8 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                     else "No songs found here."
                                 )
                             } else {
-                                LazyColumn {
+                                Box(Modifier.fillMaxSize()) {
+                        LazyColumn(state = songListState, modifier = Modifier.fillMaxSize().padding(end = if (sort == "Name" && search.isBlank() && tab == 0) 18.dp else 0.dp)) {
                                     items(
                                         items = visibleSongs,
                                         key = { it.uri.toString() }
@@ -939,35 +982,123 @@ fun SoundwaveScreen(player: ExoPlayer) {
                                                 requestAddToPlaylist(song)
                                             },
                                             onPlayNext = {
-                                                val queue = playQueue.toMutableList()
-                                                queue.removeAll {
-                                                    it.uri == song.uri
-                                                }
-                                                val insertAt =
-                                                    (player.currentMediaItemIndex + 1)
-                                                        .coerceIn(0, queue.size)
-                                                queue.add(insertAt, song)
-                                                playQueue = queue
-
-                                                if (current == null) {
-                                                    playSong(song, listOf(song))
-                                                } else {
-                                                    player.addMediaItem(
-                                                        player.currentMediaItemIndex + 1,
-                                                        MediaItem.fromUri(song.uri)
-                                                    )
-                                                    Toast.makeText(
-                                                        context,
-                                                        "Added to the queue",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
-                                            }
+                                                  if (current == null || player.mediaItemCount == 0) {
+                                                      playSong(song, listOf(song))
+                                                  } else if (song.uri == player.currentMediaItem?.localConfiguration?.uri) {
+                                                      Toast.makeText(context, "This song is already playing", Toast.LENGTH_SHORT).show()
+                                                  } else {
+                                                      val existingIndex = (0 until player.mediaItemCount).firstOrNull { i ->
+                                                          player.getMediaItemAt(i).localConfiguration?.uri == song.uri
+                                                      }
+                                                      if (existingIndex != null) {
+                                                          player.removeMediaItem(existingIndex)
+                                                      }
+                                                      val nextIndex = (player.currentMediaItemIndex + 1).coerceIn(0, player.mediaItemCount)
+                                                      player.addMediaItem(nextIndex, MediaItem.fromUri(song.uri))
+                                                      playQueue = (0 until player.mediaItemCount).mapNotNull { i ->
+                                                          val uri = player.getMediaItemAt(i).localConfiguration?.uri
+                                                          songs.firstOrNull { it.uri == uri }
+                                                      }
+                                                      Toast.makeText(context, "Added to Up Next", Toast.LENGTH_SHORT).show()
+                                                  }
+                                              }
                                         )
                                     }
                                 }
                             }
                         }
+                    if (sort == "Name" && search.isBlank() && tab == 0 && visibleSongs.isNotEmpty()) {
+                        val alphabet = ('A'..'Z').map { it.toString() } + "#"
+                        var railHeight by remember { mutableFloatStateOf(1f) }
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .fillMaxHeight()
+                                .width(18.dp)
+                                .padding(vertical = 8.dp)
+                                .onSizeChanged { railHeight = it.height.toFloat().coerceAtLeast(1f) }
+                                .pointerInput(visibleSongs, railHeight) {
+                                    detectVerticalDragGestures(
+                                        onDragStart = { offset ->
+                                            val index = ((offset.y / railHeight) * alphabet.size).toInt().coerceIn(0, alphabet.lastIndex)
+                                            val letter = alphabet[index]
+                                            fastScrollLetter = letter
+                                            val exactTarget = visibleSongs.indexOfFirst {
+                                                val first = it.title.trim().firstOrNull()?.uppercaseChar()
+                                                if (letter == "#") first == null || !first.isLetter() else first?.toString() == letter
+                                            }
+                                            val target = if (exactTarget >= 0) exactTarget else {
+                                                val wanted = if (letter == "#") Int.MAX_VALUE else letter[0].code
+                                                visibleSongs.indexOfFirst {
+                                                    val first = it.title.trim().firstOrNull()?.uppercaseChar()
+                                                    if (letter == "#") first == null || first?.isLetter() == false
+                                                    else first != null && first.isLetter() && first.code >= wanted
+                                                }.takeIf { it >= 0 } ?: visibleSongs.lastIndex
+                                            }
+                                            if (target >= 0) {
+                                                fastScrollScope.launch {
+                                                    songListState.scrollToItem(target)
+                                                }
+                                            }
+                                        },
+                                        onVerticalDrag = { change, _ ->
+                                            val index = ((change.position.y / railHeight) * alphabet.size).toInt().coerceIn(0, alphabet.lastIndex)
+                                            val letter = alphabet[index]
+                                            fastScrollLetter = letter
+                                            val exactTarget = visibleSongs.indexOfFirst {
+                                                val first = it.title.trim().firstOrNull()?.uppercaseChar()
+                                                if (letter == "#") first == null || !first.isLetter() else first?.toString() == letter
+                                            }
+                                            val target = if (exactTarget >= 0) exactTarget else {
+                                                val wanted = if (letter == "#") Int.MAX_VALUE else letter[0].code
+                                                visibleSongs.indexOfFirst {
+                                                    val first = it.title.trim().firstOrNull()?.uppercaseChar()
+                                                    if (letter == "#") first == null || first?.isLetter() == false
+                                                    else first != null && first.isLetter() && first.code >= wanted
+                                                }.takeIf { it >= 0 } ?: visibleSongs.lastIndex
+                                            }
+                                            if (target >= 0) {
+                                                change.consume()
+                                                fastScrollScope.launch {
+                                                    songListState.scrollToItem(target)
+                                                }
+                                            }
+                                        },
+                                        onDragEnd = { fastScrollLetter = null },
+                                        onDragCancel = { fastScrollLetter = null }
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxHeight(),
+                                verticalArrangement = Arrangement.SpaceEvenly,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                alphabet.forEach { letter ->
+                                    Text(
+                                        text = letter,
+                                        color = if (fastScrollLetter == letter) RED else GREY,
+                                        fontSize = 8.sp,
+                                        lineHeight = 9.sp
+                                    )
+                                }
+                            }
+                            fastScrollLetter?.let { letter ->
+                                Text(
+                                    text = letter,
+                                    color = WHITE,
+                                    fontSize = 26.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .align(Alignment.CenterStart)
+                                        .offset(x = (-54).dp)
+                                        .background(RED, RoundedCornerShape(12.dp))
+                                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
                     }
                 }
             }
@@ -1262,7 +1393,8 @@ private fun FullPlayerScreen(
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit
+    onCycleRepeat: () -> Unit,
+    onOpenUpNext: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
@@ -1311,10 +1443,8 @@ private fun FullPlayerScreen(
                 .padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onBack) {
-                Text("⌄", color = WHITE, fontSize = 30.sp)
-            }
-
+            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = WHITE) }
+            IconButton(onClick = onOpenUpNext) { Icon(Icons.Filled.QueueMusic, contentDescription = "Up Next", tint = WHITE) }
             Spacer(Modifier.weight(1f))
 
             Row(
@@ -1512,11 +1642,11 @@ private fun FullPlayerScreen(
                 )
             }
 
-            TextButton(onClick = onToggleFavorite) {
-                Text(
-                    if (isFavorite) "♥" else "♡",
-                    color = RED,
-                    fontSize = 30.sp
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = if (isFavorite) "Remove favourite" else "Add favourite",
+                    tint = RED
                 )
             }
         }
@@ -1682,3 +1812,72 @@ private fun FullPlayerScreen(
     }
 }
 
+@Composable
+private fun UpNextScreen(
+    player: ExoPlayer,
+    current: Song?,
+    songs: List<Song>,
+    onBack: () -> Unit,
+    onMakeNext: (Song) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BG)
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text("← Back", color = RED)
+            }
+            Text(
+                "Up Next",
+                color = WHITE,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text("NOW PLAYING", color = RED, fontWeight = FontWeight.Bold)
+        Text(
+            current?.title ?: "Nothing playing",
+            color = WHITE,
+            fontSize = 18.sp
+        )
+        Spacer(Modifier.height(20.dp))
+        Text("UPCOMING SONGS", color = GREY, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+
+        val upcoming = ((player.currentMediaItemIndex + 1).coerceAtLeast(0) until player.mediaItemCount)
+            .mapNotNull { i ->
+                val uri = player.getMediaItemAt(i).localConfiguration?.uri
+                songs.firstOrNull { it.uri == uri }
+            }
+
+        if (upcoming.isEmpty()) {
+            Text("No upcoming songs", color = GREY)
+        } else {
+            LazyColumn {
+                items(upcoming, key = { it.uri.toString() }) { song ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onMakeNext(song) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(song.title, color = WHITE)
+                            Text(song.artist, color = GREY, fontSize = 12.sp)
+                        }
+                        Text("PLAY NEXT", color = RED, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
